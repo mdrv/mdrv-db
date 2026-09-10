@@ -38,6 +38,7 @@ jobs:
           grep -q "^version = \"$V\"" Cargo.toml
           grep -q "\"version\": \"$V\"" packages/db/package.json
           grep -q "\"version\": \"$V\"" packages/db-config/package.json
+          grep -q "\"version\": \"$V\"" packages/db-events/package.json
       - name: Build CLI
         run: cargo build --release --locked --target ${{ matrix.target }} -p mdrv-db
       - name: Smoke the binary
@@ -122,6 +123,8 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       - run: npm publish --access public
         working-directory: packages/db-config
+      - run: npm publish --access public
+        working-directory: packages/db-events
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 

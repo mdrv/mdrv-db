@@ -1,0 +1,15 @@
+{
+  "lockfileVersion": 2,
+  "configVersion": 1,
+  "workspaces": {
+    "": {
+      "name": "@mdrv/db-events",
+      "dependencies": {
+        "@mdrv/db": "^0.2.1",
+      },
+    },
+  },
+  "packages": {
+    "@mdrv/db": ["@mdrv/db@0.2.1", "", { "os": "linux", "cpu": [ "x64", "arm64", ] }, "sha512-Z5peoI+BbF9nxeEvMEuCZTTPW/4IxBSCm0ye41bGbbhtccBaYrUd0Ftfq1/368PKgweE0ASVPbI29lf5MBGCTQ=="],
+  }
+}
