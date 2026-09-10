@@ -1,4 +1,4 @@
-import type { AdminEngine, MdrvAdminOptions } from './admin'
+import type { AdminEngine, MdrvDbAdminOptions } from './admin'
 
 export interface BackupVerifyReport {
 	ok: boolean
@@ -8,9 +8,9 @@ export interface BackupVerifyReport {
 	anomalies: string[]
 }
 
-export function createMdrvAdmin(
+export function createMdrvDbAdmin(
 	engine: AdminEngine,
-	opts: MdrvAdminOptions,
+	opts: MdrvDbAdminOptions,
 ): (req: Request) => Promise<Response>
 
 export function verifyBackupDir(dir: string): Promise<BackupVerifyReport>

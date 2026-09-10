@@ -55,13 +55,13 @@ export interface DbConfig {
 	[key: string]: unknown
 }
 
-export interface MdrvConfig {
+export interface MdrvDbConfig {
 	defaults?: { durability?: Durability; verify?: string }
 	sched?: { data_root?: string; backup_root?: string }
 	db: Record<string, DbConfig>
 }
 
-export interface MdrvEvent {
+export interface MdrvDbEvent {
 	seq: number
 	type: string
 	member_id: string
@@ -69,10 +69,10 @@ export interface MdrvEvent {
 	created_at: number
 }
 
-export interface MdrvHooks {
-	onEvent?: (evt: MdrvEvent, mdrv: unknown) => void | Promise<void>
+export interface MdrvDbHooks {
+	onEvent?: (evt: MdrvDbEvent, mdrv: unknown) => void | Promise<void>
 }
 
-export function loadConfig(text: string): MdrvConfig {
-	return parse(text) as unknown as MdrvConfig
+export function loadConfig(text: string): MdrvDbConfig {
+	return parse(text) as unknown as MdrvDbConfig
 }

@@ -10,8 +10,8 @@ import { blake3Hex } from './index.js'
  *
  * Mount it on your Bun.serve fetch (mdrv mode only):
  *
- *   import { createMdrvAdmin } from '@mdrv/db/admin'
- *   const admin = createMdrvAdmin(engine, { token: process.env.MDRV_ADMIN_TOKEN! })
+ *   import { createMdrvDbAdmin } from '@mdrv/db/admin'
+ *   const admin = createMdrvDbAdmin(engine, { token: process.env.MDRV_ADMIN_TOKEN! })
  *   // in fetch: if (url.pathname === '/mdrv/rpc') return admin(req)
  *
  * Security: the token holder may trigger backups to ANY directory and prune
@@ -26,7 +26,7 @@ export interface AdminEngine {
 	checkpoint(compact?: boolean): Promise<string>
 }
 
-export interface MdrvAdminOptions {
+export interface MdrvDbAdminOptions {
 	token: string
 }
 
@@ -61,9 +61,9 @@ function maybeParse(value: string): unknown {
 }
 
 /** Handler for POST /mdrv/rpc. Returns undefined for any other request. */
-export function createMdrvAdmin(
+export function createMdrvDbAdmin(
 	engine: AdminEngine,
-	opts: MdrvAdminOptions,
+	opts: MdrvDbAdminOptions,
 ): (req: Request) => Promise<Response> {
 	return async (req: Request): Promise<Response> => {
 		const url = new URL(req.url)
