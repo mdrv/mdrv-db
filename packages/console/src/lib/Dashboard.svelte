@@ -31,8 +31,9 @@
 		UnauthorizedError,
 	} from './api'
 
-	let { status, onunauthorized }: {
+	let { status, runningSlug, onunauthorized }: {
 		status: FleetStatus
+		runningSlug: string | null
 		onunauthorized: () => void
 	} = $props()
 
@@ -193,7 +194,7 @@
 					class={selectedSlug === s.slug ? rowActive : undefined}
 					onclick={() => select(s.slug)}
 				>
-					<td>{s.slug}</td>
+					<td>{s.slug} {#if runningSlug === s.slug}<span class={`${badge} ${badgeVariant.running}`}>running…</span>{/if}</td>
 					<td>{s.name}</td>
 					<td>
 						<span

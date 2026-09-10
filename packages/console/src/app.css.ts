@@ -102,6 +102,7 @@ export const badge = style({
 export const badgeVariant = styleVariants({
 	ok: { color: vars.color.ok, borderColor: vars.color.ok, background: 'rgba(166, 227, 161, 0.08)' },
 	skipped: { color: vars.color.warn, borderColor: vars.color.warn, background: 'rgba(249, 226, 175, 0.08)' },
+	running: { color: vars.color.warn, borderColor: vars.color.warn, background: 'rgba(249, 226, 175, 0.08)' },
 	error: { color: vars.color.error, borderColor: vars.color.error, background: 'rgba(243, 139, 168, 0.08)' },
 	never: { color: vars.color.muted, borderColor: vars.color.border },
 })
@@ -185,3 +186,4 @@ export const muted = style({ color: vars.color.muted })
 export const okText = style({ color: vars.color.ok })
 export const warnText = style({ color: vars.color.warn })
 export const errorText = style({ color: vars.color.error })
+export const footer = style({ color: vars.color.muted, fontSize: '12px' })

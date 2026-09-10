@@ -72,6 +72,10 @@ export interface PruneResponse {
 	removed: number
 }
 
+export interface VersionResponse {
+	version: string
+}
+
 export class ApiError extends Error {
 	status: number
 	hint: string | null
@@ -125,6 +129,8 @@ const json = (body: unknown): RequestInit => ({
 })
 
 export const getStatus = (): Promise<FleetStatus> => request<FleetStatus>('/api/status')
+
+export const fetchVersion = (): Promise<VersionResponse> => request<VersionResponse>('/api/version')
 
 export const getBackups = (slug: string): Promise<BackupsResponse> =>
 	request<BackupsResponse>(`/api/slugs/${encodeURIComponent(slug)}/backups`)

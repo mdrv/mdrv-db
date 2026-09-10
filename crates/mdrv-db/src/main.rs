@@ -267,10 +267,12 @@ enum DaemonCmd {
         #[arg(long, value_hint = ValueHint::DirPath)]
         console: Option<PathBuf>,
     },
-    /// Show per-slug daemon state (last run, next run, result, backups)
     Status {
         /// Only this fleet slug
         slug: Option<String>,
+        /// Emit machine-readable JSON instead of the table
+        #[arg(long)]
+        json: bool,
     },
     /// Write a systemd user unit for `daemon run`
     Install,
@@ -506,7 +508,7 @@ fn main() -> ExitCode {
                 port,
                 console,
             } => daemon::run(slug.as_deref(), once, interval_secs, bind, port, console),
-            DaemonCmd::Status { slug } => daemon::status(slug.as_deref()),
+            DaemonCmd::Status { slug, json } => daemon::status(slug.as_deref(), json),
             DaemonCmd::Install => daemon::install(),
         },
         Cmd::Blob { op } => match op {

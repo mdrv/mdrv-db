@@ -7,9 +7,10 @@
 //!   GET  /api/slugs/{slug}/backups -> recovery dir listing + manifest summaries
 //!   GET  /api/slugs/{slug}/report  -> offline report dump (409 when owner runs)
 //!   POST /api/slugs/{slug}/backup  -> run one job now (backup->verify->checkpoint)
-//!   POST /api/slugs/{slug}/prune   -> retention prune now
+//!   POST /api/slugs/{slug}/prune   -> retention prune now (retention + keep)
+//!   GET  /api/version              -> binary version (authed)
+//!   GET  /healthz                  -> liveness probe (no auth)
 //!   GET  /api/events               -> SSE: job.started / job.finished / status
-//!   GET  /*                        -> embedded console (or --console dir)
 //!
 //! Auth: `MDRV_DB_ADMIN_TOKEN`; when unset a token is generated and printed
 //! once. All routes except POST /login require the session cookie.
@@ -375,6 +376,7 @@ async fn backup_now(
         )
             .into_response();
     };
+    publish_started(&app, &slug);
     let j2 = j.clone();
     let st = tokio::task::spawn_blocking(move || daemon::execute(&j2))
         .await
@@ -409,9 +411,11 @@ async fn prune(
             .into_response();
     };
     let recovery = j.data_dir.join("recovery");
-    let retention = j.retention_days.unwrap_or(0);
+    let retention = j.retention_days;
+    let keep = j.keep;
     let pruned =
-        tokio::task::spawn_blocking(move || daemon::prune_backups(&recovery, retention)).await;
+        tokio::task::spawn_blocking(move || daemon::prune_backups(&recovery, retention, keep))
+            .await;
     match pruned {
         Ok(Ok((kept, removed))) => {
             Json(json!({"type": "prune", "slug": slug, "kept": kept, "removed": removed}))
@@ -426,6 +430,27 @@ async fn prune(
         )
             .into_response(),
     }
+}
+
+async fn healthz() -> Response {
+    Json(json!({"ok": true})).into_response()
+}
+
+async fn version(AxState(app): AxState<Arc<App>>, headers: HeaderMap) -> Response {
+    if !authed(&app, &headers) {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error": "unauthorized"})),
+        )
+            .into_response();
+    }
+    Json(json!({"version": env!("CARGO_PKG_VERSION")})).into_response()
+}
+
+fn publish_started(app: &Arc<App>, slug: &str) {
+    let _ = app
+        .events
+        .send(json!({"type": "job.started", "slug": slug, "ts_ms": mdrv_db::now_ms()}).to_string());
 }
 
 fn publish(app: Arc<App>, st: &JobState) {
@@ -561,6 +586,7 @@ pub(crate) fn serve(opts: Opts) -> Result<(), String> {
                         .collect()
                 };
                 for j in due {
+                    publish_started(&sched_app, &j.slug);
                     let app2 = sched_app.clone();
                     tokio::spawn(async move {
                         let st = tokio::task::spawn_blocking(move || daemon::execute(&j))
@@ -584,6 +610,8 @@ pub(crate) fn serve(opts: Opts) -> Result<(), String> {
         let router = Router::new()
             .route("/login", post(login))
             .route("/logout", post(logout))
+            .route("/healthz", get(healthz))
+            .route("/api/version", get(version))
             .route("/api/status", get(status))
             .route("/api/slugs/{slug}/backups", get(backups))
             .route("/api/slugs/{slug}/report", get(report))

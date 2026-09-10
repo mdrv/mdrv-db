@@ -66,7 +66,7 @@ mdrv-db checkpoint /x/db/main.example.id --compact   # prune WAL ≤ applied_lsn
 mdrv-db daemon run --once                            # run every scheduled job now, then exit
 mdrv-db daemon run                                   # scheduler + admin REST + console on 127.0.0.1:8300
 mdrv-db daemon run --port 8301 --console ./dist      # flags override config/defaults
-mdrv-db daemon status                                # per-slug last/next run, result, backups
+mdrv-db daemon status                                # per-slug last/next run, result, backups (add --json for scripts)
 mdrv-db daemon install                               # systemd --user unit for `daemon run`
 ```
 
@@ -92,8 +92,9 @@ owner = "alice"
 data_dir = "/x/db/main.example.id"
 rpc = "127.0.0.1:8100/mdrv/rpc" # admin RPC when the owner app is up
 token_env = "MID_ADMIN_TOKEN"
-backup = "daily"
-retention_days = 30
+[db.mid.backup]
+cron = "daily"
+retention_days = 30 # or keep = 5 for count-based; min_free = "10G" guards backup disk (1G default floor, 0 = off)
 
 [db.mid.mid] # app-domain settings live under the app's section
 admins = ["ua"]
@@ -118,10 +119,12 @@ mdrv-db restore /tmp/mig --data-dir /x/db/<slug>      # writes the NEW live/ lay
   (newest always kept); a running owner is a clean skip, retried next occurrence.
   Server mode adds the admin REST + SSE (`/api/*`, cookie auth via `POST /login`,
   `MDRV_DB_ADMIN_TOKEN`) and serves the embedded console; host/port overridable via
-  `[daemon]` in the fleet config or `--bind`/`--port` flags. v1 console: fleet
-  dashboard, backup browser, report viewer, backup-now + prune (restore stays CLI).
-  `[db.<slug>.backup]`; each job = backup → verify → checkpoint → retention prune
-  (newest always kept); a running owner is a clean skip, retried next occurrence.
-- **then** — console (`packages/console`, Svelte 5 + vanilla-extract + LogTape), read-mostly.
+  `[daemon]` in the fleet config or `--bind`/`--port` flags. `GET /healthz` is an
+  unauthenticated liveness probe; `GET /api/version` (authed) reports the binary
+  version. v1 console: fleet dashboard, backup browser, report viewer, backup-now +
+  prune (restore stays CLI), live `job.started`/`job.finished` badges via SSE.
+  Retention: `retention_days` and/or `keep = N` (newest always kept); the disk guard
+  skips a job when the backup volume has less free space than `min_free` (default
+  1 GiB, `0` disables) — a skip is surfaced in status/SSE, never auto-deletes.
 - releases: bump manifests → commit → tag `vX.Y.Z` (CI publishes crates.io + npm + AUR).
 

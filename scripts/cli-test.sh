@@ -125,6 +125,7 @@ expect_contains "daemon job reports ok" "$OUT" "\[dtest\] ok"
 [ -f "$T/dtest/daemon-state.json" ] && ok "daemon state written" || bad "daemon state missing"
 OUT=$(MDRV_DB_CONFIG=$DCFG $BIN daemon status 2>&1); check "daemon status" 0 $?
 expect_contains "status shows dtest" "$OUT" "dtest"
+expect_contains "status --json emits rows" "$(MDRV_DB_CONFIG=$DCFG $BIN daemon status --json 2>&1)" '"slug": "dtest"'
 N1=$(ls -1d "$T/dtest/recovery/"*-daemon 2>/dev/null | wc -l)
 MDRV_DB_CONFIG=$DCFG $BIN daemon run dtest --once >/dev/null 2>&1
 N2=$(ls -1d "$T/dtest/recovery/"*-daemon 2>/dev/null | wc -l)
@@ -133,6 +134,15 @@ sed -i 's/retention_days = 7/retention_days = 0/' "$DCFG"
 MDRV_DB_CONFIG=$DCFG $BIN daemon run dtest --once >/dev/null 2>&1
 N3=$(ls -1d "$T/dtest/recovery/"*-daemon 2>/dev/null | wc -l)
 [ "$N3" = 1 ] && ok "retention prunes old, keeps newest" || bad "retention left $N3 backups"
+# disk guard + keep=N retention
+sed -i 's/retention_days = 0/min_free = "9999G"\nkeep = 2/' "$DCFG"
+OUT=$(MDRV_DB_CONFIG=$DCFG $BIN daemon run dtest --once 2>&1)
+expect_contains "disk guard skips" "$OUT" "insufficient free"
+sed -i 's/min_free = "9999G"/min_free = 0/' "$DCFG"
+MDRV_DB_CONFIG=$DCFG $BIN daemon run dtest --once >/dev/null 2>&1
+MDRV_DB_CONFIG=$DCFG $BIN daemon run dtest --once >/dev/null 2>&1
+NG=$(ls -1d "$T/dtest/recovery/"*-daemon 2>/dev/null | wc -l)
+[ "$NG" = 2 ] && ok "keep=2 caps backups" || bad "keep left $NG backups"
 cat > "$DCFG" << EOF
 [db.bad]
 data_dir = "$T/nodir"
@@ -162,10 +172,20 @@ if command -v curl >/dev/null; then
     sleep 1
     check "console served" 0 0; [ "$(curl -s -o /dev/null -w '%{http_code}' $B/)" = 200 ] || { echo FAIL: console; FAIL=$((FAIL+1)); }
     check "api unauthorized" 0 0; [ "$(curl -s -o /dev/null -w '%{http_code}' $B/api/status)" = 401 ] || { echo FAIL: unauth; FAIL=$((FAIL+1)); }
+    check "healthz open" 0 0; [ "$(curl -s -o /dev/null -w '%{http_code}' $B/healthz)" = 200 ] || { echo FAIL: healthz; FAIL=$((FAIL+1)); }
+    check "version unauthorized" 0 0; [ "$(curl -s -o /dev/null -w '%{http_code}' $B/api/version)" = 401 ] || { echo FAIL: ver-unauth; FAIL=$((FAIL+1)); }
     curl -s -c "$T/jar" -H 'content-type: application/json' -d '{"token":"tok"}' "$B/login" >/dev/null
+    expect_contains "version authed" "$(curl -s -b "$T/jar" $B/api/version)" '"version"'
     expect_contains "status json" "$(curl -s -b "$T/jar" $B/api/status)" "dtest"
+    timeout 3 curl -s -N -b "$T/jar" "$B/api/events" > "$T/sse.txt" &
+    SPID=$!
+    sleep 0.5
     expect_contains "backup-now ok" "$(curl -s -b "$T/jar" -X POST $B/api/slugs/dtest/backup)" '"last_result":"ok"'
-    expect_contains "sse first frame" "$(timeout 3 curl -s -N -b "$T/jar" $B/api/events | head -c 2000)" '"type":"status"'
+    wait $SPID 2>/dev/null
+    SSE=$(cat "$T/sse.txt")
+    expect_contains "sse status frame" "$SSE" '"type":"status"'
+    expect_contains "sse job.started" "$SSE" '"type":"job.started"'
+    expect_contains "sse job.finished" "$SSE" '"type":"job.finished"'
     kill $DPID 2>/dev/null; wait $DPID 2>/dev/null
 else
     echo "skip: curl not available"

@@ -4,6 +4,11 @@ import type { FleetStatus } from './api'
 export type FleetEvent =
 	| FleetStatus
 	| {
+		type: 'job.started'
+		slug: string
+		ts_ms: number
+	}
+	| {
 		type: 'job.finished'
 		slug: string
 		result: string

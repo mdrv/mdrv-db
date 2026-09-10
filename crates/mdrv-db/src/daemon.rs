@@ -26,6 +26,8 @@ pub(crate) struct Job {
     pub(crate) name: Option<String>,
     pub(crate) cron: Option<String>,
     pub(crate) retention_days: Option<i64>,
+    pub(crate) keep: Option<usize>,
+    pub(crate) min_free: Option<u64>,
 }
 
 #[derive(Clone, serde::Deserialize, serde::Serialize)]
@@ -68,12 +70,20 @@ fn jobs(cfg: &toml::Value) -> Vec<Job> {
             .or_else(|| data_root.as_ref().map(|r| r.join(slug)))
             .unwrap_or_else(|| PathBuf::from("/x/db").join(slug));
         let name = t.get("name").and_then(|v| v.as_str()).map(String::from);
-        let (cron, retention_days) = match t.get("backup") {
+        let (cron, retention_days, keep, min_free) = match t.get("backup") {
             Some(b) => (
                 b.get("cron").and_then(|v| v.as_str()).map(String::from),
                 b.get("retention_days").and_then(|v| v.as_integer()),
+                b.get("keep")
+                    .and_then(|v| v.as_integer())
+                    .map(|v| v.max(0) as usize),
+                b.get("min_free").and_then(|v| {
+                    v.as_str()
+                        .and_then(parse_size)
+                        .or_else(|| v.as_integer().map(|i| i.max(0) as u64))
+                }),
             ),
-            None => (None, None),
+            None => (None, None, None, None),
         };
         out.push(Job {
             slug: slug.clone(),
@@ -81,6 +91,8 @@ fn jobs(cfg: &toml::Value) -> Vec<Job> {
             name,
             cron,
             retention_days,
+            keep,
+            min_free,
         });
     }
     out
@@ -133,11 +145,65 @@ pub(crate) fn backup_ts(name: &str) -> Option<i64> {
     digits.parse().ok()
 }
 
+/// Default minimum free space on the backup volume (1 GiB);
+/// `min_free = 0` disables the guard.
+const DEFAULT_MIN_FREE: u64 = 1 << 30;
+
+/// Parse `"10G"`, `"500M"`, `"16K"`, `"64B"` or a bare byte count.
+fn parse_size(s: &str) -> Option<u64> {
+    let t = s.trim();
+    let (num, mult) = match t.chars().last()? {
+        'K' | 'k' => (&t[..t.len() - 1], 1024u64),
+        'M' | 'm' => (&t[..t.len() - 1], 1024 * 1024),
+        'G' | 'g' => (&t[..t.len() - 1], 1024 * 1024 * 1024),
+        'B' | 'b' => (&t[..t.len() - 1], 1),
+        _ => (t, 1),
+    };
+    num.trim()
+        .parse::<u64>()
+        .ok()
+        .map(|n| n.saturating_mul(mult))
+}
+
+fn fmt_bytes(n: u64) -> String {
+    let g = n as f64 / (1 << 30) as f64;
+    if g >= 1.0 {
+        return format!("{g:.1}G");
+    }
+    format!("{:.0}M", n as f64 / (1 << 20) as f64)
+}
+
+/// Pre-flight disk guard (daemon-managed jobs only): free space on the
+/// volume holding `recovery/` must be >= floor, else the job is skipped.
+fn disk_guard(j: &Job) -> Option<String> {
+    let floor = j.min_free.unwrap_or(DEFAULT_MIN_FREE);
+    if floor == 0 {
+        return None;
+    }
+    let target = j.data_dir.join("recovery");
+    let probe = if target.is_dir() {
+        target
+    } else {
+        j.data_dir.clone()
+    };
+    let avail = fs2::available_space(&probe).ok()?;
+    if avail < floor {
+        Some(format!(
+            "insufficient free: {} < {} (min_free)",
+            fmt_bytes(avail),
+            fmt_bytes(floor)
+        ))
+    } else {
+        None
+    }
+}
+
 /// Delete expired backup dirs, always keeping the newest. Returns
 /// (kept, removed).
 pub(crate) fn prune_backups(
     recovery: &Path,
-    retention_days: i64,
+    retention_days: Option<i64>,
+    keep: Option<usize>,
 ) -> Result<(usize, usize), String> {
     let mut dirs: Vec<(i64, PathBuf)> = Vec::new();
     for e in std::fs::read_dir(recovery)
@@ -157,10 +223,19 @@ pub(crate) fn prune_backups(
         return Ok((0, 0));
     }
     dirs.sort_by_key(|(ts, _)| *ts);
-    let cutoff = mdrv_db::now_ms() - retention_days.saturating_mul(86_400_000);
+    let cutoff = retention_days.map(|d| mdrv_db::now_ms() - d.saturating_mul(86_400_000));
+    // keep=N caps the number of retained backups; without it, retention_days
+    // alone governs (everything unexpired stays).
+    let deletable_keep = match keep {
+        Some(k) => dirs.len().saturating_sub(k.max(1)),
+        None => 0,
+    };
     let mut removed = 0usize;
-    for (ts, p) in dirs.iter().take(dirs.len() - 1) {
-        if *ts < cutoff {
+    for (i, (ts, p)) in dirs.iter().enumerate() {
+        // Union of the two deletion rules; the newest dir is always exempt.
+        let expired = cutoff.is_some_and(|c| *ts < c) && i + 1 < dirs.len();
+        let excess = i < deletable_keep;
+        if expired || excess {
             std::fs::remove_dir_all(p).map_err(|e| format!("prune {}: {e}", p.display()))?;
             removed += 1;
         }
@@ -249,10 +324,15 @@ pub(crate) fn load_state(j: &Job) -> Option<State> {
 /// retention-prune and persist the state file.
 pub(crate) fn execute(j: &Job) -> State {
     let started = mdrv_db::now_ms();
-    let (result, detail, lsn, backup) = run_job(j);
+    let (result, detail, lsn, backup) = match disk_guard(j) {
+        Some(msg) => ("skipped".into(), msg, None, None),
+        None => run_job(j),
+    };
     let mut detail = detail;
-    if let Some(rd) = j.retention_days {
-        if let Ok((kept, removed)) = prune_backups(&j.data_dir.join("recovery"), rd) {
+    if j.retention_days.is_some() || j.keep.is_some() {
+        if let Ok((kept, removed)) =
+            prune_backups(&j.data_dir.join("recovery"), j.retention_days, j.keep)
+        {
             if removed > 0 {
                 detail = format!("{detail}; pruned {removed} old backup(s), kept {kept}");
             }
@@ -369,7 +449,7 @@ pub fn run(
     }
 }
 
-pub fn status(slug: Option<&str>) -> ExitCode {
+pub fn status(slug: Option<&str>, json: bool) -> ExitCode {
     let (cfg_path, cfg) = match load_fleet() {
         Ok(x) => x,
         Err(e) => {
@@ -391,6 +471,36 @@ pub fn status(slug: Option<&str>) -> ExitCode {
     }
     if js.is_empty() {
         println!("(no [db.*] entries) [{cfg_path:?}]");
+        return ExitCode::SUCCESS;
+    }
+    if json {
+        let rows: Vec<serde_json::Value> = js
+            .iter()
+            .map(|j| {
+                let st = load_state(j);
+                serde_json::json!({
+                    "slug": j.slug,
+                    "name": j.name,
+                    "data_dir": j.data_dir.display().to_string(),
+                    "cron": j.cron,
+                    "initialized": j.data_dir.join("live/fjall").is_dir(),
+                    "backups": count_backups(&j.data_dir.join("recovery")),
+                    "last_run_ms": st.as_ref().map(|s| s.last_run_ms),
+                    "last_result": st
+                        .as_ref()
+                        .map(|s| s.last_result.clone())
+                        .unwrap_or_else(|| "never".into()),
+                    "detail": st.as_ref().map(|s| s.detail.clone()).unwrap_or_default(),
+                    "next_run_ms": st.as_ref().map(|s| s.next_run_ms),
+                    "applied_lsn": st.as_ref().and_then(|s| s.applied_lsn),
+                    "last_backup": st.as_ref().and_then(|s| s.last_backup.clone()),
+                })
+            })
+            .collect();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&rows).unwrap_or_else(|_| "[]".into())
+        );
         return ExitCode::SUCCESS;
     }
     println!(
