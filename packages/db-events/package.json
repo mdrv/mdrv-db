@@ -1,6 +1,6 @@
 {
 	"name": "@mdrv/db-events",
-	"version": "0.2.1",
+	"version": "0.3.0",
 	"type": "module",
 	"description": "Transactional-outbox event kit for mdrv-db: outbox ops, /events endpoint, atomic-cursor consumer poller",
 	"main": "index.ts",

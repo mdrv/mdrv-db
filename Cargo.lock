@@ -1711,7 +1711,7 @@ dependencies = [
 
 [[package]]
 name = "mdrv-db"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "blake3",
  "carapace_spec_clap",
@@ -1731,7 +1731,7 @@ dependencies = [
 
 [[package]]
 name = "mdrv-db-napi"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "blake3",
  "mdrv-db",
