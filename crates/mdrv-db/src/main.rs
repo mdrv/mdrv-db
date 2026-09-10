@@ -18,13 +18,15 @@ fn resolve_name(data_dir: &std::path::Path, name: &Option<String>) -> String {
     if let Some(n) = name {
         return n.clone();
     }
+    // The envelope's own db_name is authoritative when present (the name
+    // guard compares against it); config lookup only fills in fresh dirs.
+    if let Some(n) = read_meta_name(data_dir) {
+        return n;
+    }
     if let Some(p) = config::default_path() {
         if let Some(n) = config::lookup_name(&p, data_dir) {
             return n;
         }
-    }
-    if let Some(n) = read_meta_name(data_dir) {
-        return n;
     }
     data_dir
         .file_name()
