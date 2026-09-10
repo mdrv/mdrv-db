@@ -133,12 +133,7 @@ impl DataPort for TursoPort {
 /// Resolve the live dir: `<dir>/live` when the fleet layout is used,
 /// otherwise the dir itself (flat layout, v1-compatible).
 pub fn live_dir(root: &Path) -> PathBuf {
-    let live = root.join("live");
-    if live.is_dir() {
-        live
-    } else {
-        root.to_path_buf()
-    }
+    mdrv_db::live_dir(root)
 }
 
 /// Open the engine for CLI ops. Fails with a hint when the fjall lock is

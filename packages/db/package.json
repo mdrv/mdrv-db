@@ -1,0 +1,21 @@
+{
+	"name": "@mdrv/db",
+	"version": "0.2.0",
+	"type": "module",
+	"description": "mdrv-db for Bun: Fjall durability envelope (WAL/recovery/integrity) around Turso + content-addressed blobs, via napi-rs",
+	"main": "./index.cjs",
+	"types": "index.d.ts",
+	"exports": {
+		".": {
+			"types": "./index.d.ts",
+			"import": "./index.js",
+			"require": "./index.cjs"
+		},
+		"./admin": { "types": "./admin.d.ts", "default": "./admin.ts" }
+	},
+	"files": ["index.js", "index.cjs", "index.d.ts", "admin.ts", "admin.d.ts", "*.node"],
+	"scripts": {
+		"build:core": "cd ../../crates && cargo build --release -p mdrv-db-napi",
+		"build": "bun run build:core && cp ../target/release/libmdrv_db_napi.so ./mdrv-db.linux-x64-gnu.node"
+	}
+}

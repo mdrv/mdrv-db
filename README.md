@@ -20,7 +20,7 @@ first-class, all inspectable offline.
 | Fleet config (`~/.config/mdrv-db/config.toml`)                   | ✅ read/check/set via CLI                                                         |
 | `serve` (daemon: scheduler, admin RPC relay, website)            | ⏳ P2                                                                             |
 | Website (fleet dashboard, log viewer, backup browser)            | ⏳ P3                                                                             |
-| `@mdrv/db` npm binding (napi) v2                                 | ⏳ P4 (consumers still build against v1)                                          |
+| `@mdrv/db` npm binding (napi) v2                                 | ✅ (done) (consumers still build against v1)                                          |
 
 ## Layout (per-database)
 

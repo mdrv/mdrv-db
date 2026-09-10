@@ -26,3 +26,11 @@ pub fn now_ms() -> i64 {
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
 }
+
+/// Data dir root for an engine: `<root>/live` when the v2 fleet layout
+/// exists, otherwise the root itself (flat layout, v1-compatible).
+pub fn live_dir(root: &std::path::Path) -> std::path::PathBuf {
+    let live = root.join("live");
+    if live.is_dir() { live } else { root.to_path_buf() }
+}
+
