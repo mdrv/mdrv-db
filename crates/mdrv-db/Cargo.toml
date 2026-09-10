@@ -14,6 +14,8 @@ name = "mdrv-db"
 path = "src/main.rs"
 
 [dependencies]
+turso = { workspace = true }
+tokio = { version = "1", features = ["rt"] }
 regex = { workspace = true }
 fjall = { workspace = true }
 serde = { workspace = true }

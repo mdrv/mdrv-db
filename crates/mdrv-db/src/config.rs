@@ -24,6 +24,30 @@ fn load(file: &Path) -> Result<toml::Value, String> {
     toml::from_str(&text).map_err(|e| format!("TOML parse error in {}: {e}", file.display()))
 }
 
+/// Find the engine name (fleet slug) whose data_dir matches, e.g.
+/// [db.mid] data_dir = /x/db/main.example.id -> "mid". Comparison is
+/// canonicalized when possible, string-based otherwise.
+pub fn lookup_name(file: &Path, data_dir: &Path) -> Option<String> {
+    let cfg = load(file).ok()?;
+    let dbs = cfg.get("db")?.as_table()?;
+    let want = std::fs::canonicalize(data_dir)
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| data_dir.display().to_string());
+    for (slug, v) in dbs {
+        let Some(t) = v.as_table() else { continue };
+        let Some(dir) = t.get("data_dir").and_then(|d| d.as_str()) else {
+            continue;
+        };
+        let have = std::fs::canonicalize(dir)
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|_| dir.to_string());
+        if have == want {
+            return Some(slug.clone());
+        }
+    }
+    None
+}
+
 pub fn run(file: Option<PathBuf>, check: bool, set: Option<String>) -> ExitCode {
     let path = file.or_else(default_path);
     let Some(path) = path else {

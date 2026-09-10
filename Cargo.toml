@@ -16,6 +16,7 @@ blake3 = "1"
 sha2 = "0.10"
 thiserror = "2"
 regex = "1"
+turso = "0.7"
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
 carapace_spec_clap = "1"
