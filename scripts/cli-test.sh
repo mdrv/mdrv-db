@@ -145,6 +145,15 @@ OUT=$(MDRV_DB_CONFIG=$DCFG $BIN daemon run --once 2>&1); check "bad cron rejecte
 expect_contains "bad cron message" "$OUT" "bad cron"
 OUT=$(MDRV_DB_CONFIG=$DCFG $BIN daemon status 2>&1); check "status rejects bad cron" 1 $?
 OUT=$(MDRV_DB_CONFIG=$DCFG $BIN daemon run ghost --once 2>&1); check "unknown slug rejected" 1 $?
+cat > "$DCFG" << EOF
+[db.alias]
+data_dir = "$T/nodir-alias"
+
+[db.alias.backup]
+cron = "daily"
+EOF
+OUT=$(MDRV_DB_CONFIG=$DCFG $BIN daemon status 2>&1); check "cron alias 'daily' accepted" 0 $?
+expect_contains "alias row rendered" "$OUT" "alias"
 
 # --- 9. streaming blob put: 120 MiB random file, hash must match sha256sum
 HEAD=$(dirname "$DB")

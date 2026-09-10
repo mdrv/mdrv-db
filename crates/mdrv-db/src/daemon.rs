@@ -84,13 +84,17 @@ fn jobs(cfg: &toml::Value) -> Vec<Job> {
     out
 }
 
-/// Accepts standard 5-field cron (minutes first) or the crate's 6/7-field
-/// form (seconds first).
+/// Accepts the common aliases (hourly/daily/weekly/monthly), standard
+/// 5-field cron (minutes first), or the crate's 6/7-field form.
 fn parse_sched(expr: &str) -> Result<cron::Schedule, String> {
-    let norm = if expr.split_whitespace().count() == 5 {
-        format!("0 {expr}")
-    } else {
-        expr.to_string()
+    let lower = expr.trim().to_ascii_lowercase();
+    let norm = match lower.as_str() {
+        "hourly" => "0 0 * * * *".to_string(),
+        "daily" => "0 0 3 * * *".to_string(),
+        "weekly" => "0 0 3 * * sun".to_string(),
+        "monthly" => "0 0 3 1 * *".to_string(),
+        e if e.split_whitespace().count() == 5 => format!("0 {e}"),
+        e => e.to_string(),
     };
     norm.parse().map_err(|e| format!("bad cron '{expr}': {e}"))
 }
