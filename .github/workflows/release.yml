@@ -1,0 +1,88 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu }
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Check version sync (tag == crate == packages)
+        run: |
+          V="${GITHUB_REF_NAME#v}"
+          grep -q "^version = \"$V\"" Cargo.toml
+          grep -q "\"version\": \"$V\"" packages/db/package.json
+          grep -q "\"version\": \"$V\"" packages/db-config/package.json
+      - name: Build CLI
+        run: cargo build --release --locked -p mdrv-db
+      - name: Package
+        run: |
+          B=target/release/mdrv-db
+          $B completion > mdrv-db.yaml
+          D=mdrv-db-${{ matrix.target }}
+          mkdir -p pkg/$D
+          cp $B pkg/$D/mdrv-db
+          cp mdrv-db.yaml README.md pkg/$D/
+          tar -czf $D.tar.gz -C pkg $D
+          sha256sum $D.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.target }}
+          path: mdrv-db-*.tar.gz
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { merge-multiple: true, path: dist }
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+
+  crates:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo publish --locked -p mdrv-db
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  npm:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v4
+        with:
+          registry-url: https://registry.npmjs.org
+      - name: Build napi binding (linux-x64-gnu)
+        run: |
+          cargo build --release --locked -p mdrv-db-napi
+          cp target/release/libmdrv_db_napi.so packages/db/mdrv-db.linux-x64-gnu.node
+      - run: npm publish --access public
+        working-directory: packages/db
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - run: npm publish --access public
+        working-directory: packages/db-config
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

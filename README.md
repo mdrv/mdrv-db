@@ -113,4 +113,3 @@ mdrv-db restore /tmp/mig --data-dir /x/db/<slug>      # writes the NEW live/ lay
   backup browser, restore wizard. Read-mostly by design.
 - **P4** — napi binding v2 (`@mdrv/db`), migrate consumers (consumer apps) via backup→restore.
 
-See `PLAN.md` for decisions (D1–D6) and the full phase plan. 
