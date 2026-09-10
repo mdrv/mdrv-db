@@ -39,6 +39,11 @@ jobs:
           grep -q "\"version\": \"$V\"" packages/db/package.json
           grep -q "\"version\": \"$V\"" packages/db-config/package.json
           grep -q "\"version\": \"$V\"" packages/db-events/package.json
+      - name: Build console (embedded via include_dir)
+        run: |
+          cd packages/console
+          bun install --frozen-lockfile
+          bun run build
       - name: Build CLI
         run: cargo build --release --locked --target ${{ matrix.target }} -p mdrv-db
       - name: Smoke the binary
