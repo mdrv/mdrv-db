@@ -115,8 +115,8 @@ fn fmt_cadence(v: Option<&toml::Value>) -> String {
     match v {
         Some(t) if t.is_table() => format!(
             "{}/{}d",
-            t.get("every").and_then(|x| x.as_str()).unwrap_or("?"),
-            t.get("retain_days")
+            t.get("cron").and_then(|x| x.as_str()).unwrap_or("?"),
+            t.get("retention_days")
                 .and_then(|x| x.as_integer())
                 .unwrap_or(0)
         ),
