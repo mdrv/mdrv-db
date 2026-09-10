@@ -18,7 +18,10 @@ expect_contains() { # desc, haystack, needle
 rm -rf "$T" "$S"; mkdir -p "$T"
 
 # --- 1. completion + help navigation
-OUT=$($BIN completion 2>&1); [ $? -eq 0 ] && expect_contains "completion spec has name" "$OUT" "name: mdrv-db" || bad "completion failed"
+OUT=$($BIN completion 2>&1); [ $? -eq 0 ] && expect_contains "completion (bare) prints carapace spec" "$OUT" "name: mdrv-db" || bad "completion failed"
+OUT=$($BIN completion print 2>&1) && expect_contains "completion print spec" "$OUT" "name: mdrv-db" || bad "completion print failed"
+OUT=$($BIN completion print --shell zsh 2>&1) && expect_contains "completion print --shell zsh" "$OUT" "#compdef mdrv-db" || bad "completion print --shell zsh failed"
+if $BIN carapace install >/dev/null 2>&1; then bad "carapace subcommand should be gone"; else ok "carapace subcommand removed"; fi
 OUT=$($BIN --help 2>&1)
 for sub in init info dump verify backup restore checkpoint prune config completion blob selftest; do
   expect_contains "help lists '$sub'" "$OUT" "$sub"
@@ -132,10 +135,10 @@ DU2=$(du -sk "$BLOBS" | cut -f1)
 echo
 # --- carapace install (user spec dir; system-wide is ignored by carapace-bin) ---
 export XDG_CONFIG_HOME="$T/xdgconf"
-if OUT=$($BIN carapace install 2>&1) && [ -s "$T/xdgconf/carapace/specs/mdrv-db.yaml" ]; then
-  ok "carapace install writes user spec"
+if OUT=$($BIN completion install 2>&1) && [ -s "$T/xdgconf/carapace/specs/mdrv-db.yaml" ]; then
+  ok "completion install writes user spec"
 else
-  bad "carapace install writes user spec ($OUT)"
+  bad "completion install writes user spec ($OUT)"
 fi
 unset XDG_CONFIG_HOME
 

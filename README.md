@@ -16,11 +16,12 @@ first-class, all inspectable offline.
 | Piece                                                            | State                                                                             |
 | ---------------------------------------------------------------- | --------------------------------------------------------------------------------- |
 | Engine crate `mdrv_db` (WAL/recovery/blobs/backup/verify/report) | ✅ ported from v1, crash-matrix-proven there                                      |
-| CLI `mdrv-db` (clap + carapace completion)                       | ✅ `init` `info` `dump` `config` `verify` `backup` `restore` `checkpoint` `prune` |
+| CLI `mdrv-db` (clap + completion)                                | ✅ `init` `info` `dump` `config` `verify` `backup` `restore` `checkpoint` `prune` |
 | Fleet config (`~/.config/mdrv-db/config.toml`)                   | ✅ read/check/set via CLI                                                         |
-| `serve` (daemon: scheduler, admin RPC relay, website)            | ⏳ P2                                                                             |
-| Website (fleet dashboard, log viewer, backup browser)            | ⏳ P3                                                                             |
-| `@mdrv/db` npm binding (napi) v2                                 | ✅ (done) (consumers still build against v1)                                          |
+| `@mdrv/db` npm binding (napi) v2 (x64 + arm64, streaming blobs)  | ✅ published (crates.io + npm 0.2.1)                                              |
+| `@mdrv/db-events` (outbox + `/events` + consumer poller)         | ✅ in repo (`packages/db-events`)                                                  |
+| `daemon run` / `daemon install` (scheduler, admin REST, console) | ⏳ next                                                                            |
+| Console (fleet dashboard, log viewer, backup browser)            | ⏳ after daemon (`packages/console`, read-mostly)                                   |
 
 ## Layout (per-database)
 
@@ -44,7 +45,7 @@ Binary: `target/release/mdrv-db`.
 ## Shell completion (carapace)
 
 ```bash
-mdrv-db completion > ~/.config/carapace/specs/mdrv-db.yaml
+mdrv-db completion install
 ```
 
 ## CLI
@@ -109,7 +110,8 @@ mdrv-db restore /tmp/mig --data-dir /x/db/<slug>      # writes the NEW live/ lay
 
 - **P2** — `mdrv-db serve`: fleet daemon (scheduler: backup/verify/retention incl. restore
   verification; relays admin RPC to up owners, offline-copies down ones).
-- **P3** — website (Svelte 5 + vanilla-extract + LogTape): fleet dashboard, log viewer,
-  backup browser, restore wizard. Read-mostly by design.
-- **P4** — napi binding v2 (`@mdrv/db`), migrate consumers (consumer apps) via backup→restore.
+- **next** — daemon (`mdrv-db daemon run|install`): scheduler (backup / verify /
+  restore-verify), admin REST, hosts the console; listen 127.0.0.1:8300 (config-overridable).
+- **then** — console (`packages/console`, Svelte 5 + vanilla-extract + LogTape), read-mostly.
+- releases: bump manifests → commit → tag `vX.Y.Z` (CI publishes crates.io + npm + AUR).
 

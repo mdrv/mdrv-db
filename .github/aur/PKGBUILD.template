@@ -29,5 +29,5 @@ package() {
 post_install() {
   echo "==> carapace-bin loads user specs ONLY from ~/.config/carapace/specs"
   echo "==> (the /usr/share copy is not read as of carapace-bin 1.7.3)."
-  echo "==> Enable completions:  mdrv-db carapace install"
+  echo "==> Enable completions:  mdrv-db completion install"
 }

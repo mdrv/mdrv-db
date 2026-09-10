@@ -231,21 +231,22 @@ enum Cmd {
         abort_after: u64,
         progress: PathBuf,
     },
-    /// Emit a carapace completion spec to stdout:
-    /// mdrv-db completion > myspec.yaml
-    Completion,
-    /// Install the carapace spec into the user config dir
-    /// ($XDG_CONFIG_HOME or ~/.config)/carapace/specs/ — the only
-    /// location carapace-bin loads user specs from.
-    Carapace {
+    /// Completion helpers (bare = print the carapace spec, pipe-friendly)
+    Completion {
         #[command(subcommand)]
-        cmd: CarapaceCmd,
+        cmd: Option<CompletionCmd>,
     },
 }
 
 #[derive(Subcommand)]
-enum CarapaceCmd {
-    /// Write the spec to <user config>/carapace/specs/mdrv-db.yaml
+enum CompletionCmd {
+    /// Print a completion spec/script to stdout (carapace YAML by default)
+    Print {
+        /// Emit a native completion script for this shell instead of the carapace YAML
+        #[arg(long)]
+        shell: Option<clap_complete::shells::Shell>,
+    },
+    /// Write the carapace spec to <user config>/carapace/specs/mdrv-db.yaml
     Install,
 }
 
@@ -274,7 +275,7 @@ enum BlobOp {
 
 /// Write the generated spec into the user's carapace specs dir — the only
 /// location carapace-bin loads user specs from (UserConfigDir).
-fn carapace_install() -> Result<std::path::PathBuf, String> {
+fn completion_install() -> Result<std::path::PathBuf, String> {
     let mut buf = Vec::new();
     let mut cmd = Cli::command();
     clap_complete::generate(carapace_spec_clap::Spec, &mut cmd, "mdrv-db", &mut buf);
@@ -302,28 +303,45 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     config::set_override(cli.config.clone());
     match cli.cmd {
-        Cmd::Completion => {
-            let mut cmd = Cli::command();
-            clap_complete::generate(
-                carapace_spec_clap::Spec,
-                &mut cmd,
-                "mdrv-db",
-                &mut std::io::stdout(),
-            );
-            ExitCode::SUCCESS
-        }
-        Cmd::Carapace { cmd: CarapaceCmd::Install } => match carapace_install() {
-            Ok(path) => {
-                println!("spec installed: {}", path.display());
-                println!("carapace-bin loads user specs ONLY from this dir");
-                println!("(system-wide /usr/share/carapace/specs is ignored as of 1.7.3).");
-                println!("Completions also need the carapace shell hook (carapace <shell> init in");
-                println!("your shell rc). Test: carapace mdrv-db nushell mdrv-db ''");
+        Cmd::Completion { cmd } => match cmd {
+            None => {
+                let mut command = Cli::command();
+                clap_complete::generate(
+                    carapace_spec_clap::Spec,
+                    &mut command,
+                    "mdrv-db",
+                    &mut std::io::stdout(),
+                );
                 ExitCode::SUCCESS
             }
-            Err(e) => {
-                eprintln!("carapace install failed: {e}");
-                ExitCode::from(1)
+            Some(CompletionCmd::Print { shell }) => {
+                let mut command = Cli::command();
+                match shell {
+                    Some(s) => {
+                        clap_complete::generate(s, &mut command, "mdrv-db", &mut std::io::stdout())
+                    }
+                    None => clap_complete::generate(
+                        carapace_spec_clap::Spec,
+                        &mut command,
+                        "mdrv-db",
+                        &mut std::io::stdout(),
+                    ),
+                }
+                ExitCode::SUCCESS
+            }
+            Some(CompletionCmd::Install) => match completion_install() {
+                Ok(path) => {
+                    println!("spec installed: {}", path.display());
+                    println!("carapace-bin loads user specs ONLY from this dir");
+                    println!("(system-wide /usr/share/carapace/specs is ignored as of 1.7.3).");
+                    println!("Completions also need the carapace shell hook (carapace <shell> init in");
+                    println!("your shell rc). Test: carapace mdrv-db nushell mdrv-db ''");
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("completion install failed: {e}");
+                    ExitCode::from(1)
+                }
             }
         },
         Cmd::Init { data_dir } => {
