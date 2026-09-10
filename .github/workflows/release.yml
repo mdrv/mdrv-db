@@ -31,10 +31,11 @@ jobs:
         run: |
           B=target/release/mdrv-db
           $B completion > mdrv-db.yaml
-          D=mdrv-db-${{ matrix.target }}
+          V="${GITHUB_REF_NAME#v}"
+          D=mdrv-db-v$V-${{ matrix.target }}
           mkdir -p pkg/$D
           cp $B pkg/$D/mdrv-db
-          cp mdrv-db.yaml README.md pkg/$D/
+          cp mdrv-db.yaml README.md LICENSE pkg/$D/
           tar -czf $D.tar.gz -C pkg $D
           sha256sum $D.tar.gz
       - uses: actions/upload-artifact@v7
@@ -99,7 +100,7 @@ jobs:
     steps:
       - name: Setup system (builder user for makepkg)
         run: |
-          pacman -Sy --noconfirm pacman-contrib git openssh
+          pacman -Sy --noconfirm pacman-contrib git openssh jq
           useradd -m builder
           echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
       - name: Setup SSH for AUR
@@ -109,40 +110,44 @@ jobs:
           chmod 600 /home/builder/.ssh/id_ed25519
           chown -R builder:builder /home/builder/.ssh
           ssh-keyscan -H aur.archlinux.org >> /home/builder/.ssh/known_hosts 2>/dev/null || true
-      - name: Clone AUR package
+      - name: Clone (or init) AUR package
         run: |
           chown -R builder:builder /home/builder
           su builder -c "GIT_SSH_COMMAND='ssh -i ~/.ssh/id_ed25519' \
-            git clone ssh://aur@aur.archlinux.org/mdrv-db-bin.git /home/builder/aur"
+            git clone ssh://aur@aur.archlinux.org/mdrv-db.git /home/builder/aur \
+            || (git init /home/builder/aur && git -C /home/builder/aur remote add origin ssh://aur@aur.archlinux.org/mdrv-db.git)"
       - name: Write PKGBUILD + .SRCINFO
         run: |
           V="${{ needs.release.outputs.version }}"
-          BASE="https://github.com/mdrv/mdrv-db/releases/download/v$V"
-          X86=$(curl -fsSL "$BASE/mdrv-db-x86_64-unknown-linux-gnu.tar.gz" | sha256sum | cut -d' ' -f1)
-          ARM=$(curl -fsSL "$BASE/mdrv-db-aarch64-unknown-linux-gnu.tar.gz" | sha256sum | cut -d' ' -f1)
+          # official checksum from the crates.io API (source package, repo stays private)
+          CK=$(curl -fsSL "https://crates.io/api/v1/crates/mdrv-db/$V" | jq -r '.versions[0].checksum')
+          [ -n "$CK" ] && [ "$CK" != "null" ] || { echo "no checksum for mdrv-db $V"; exit 1; }
           cat > /home/builder/aur/PKGBUILD << EOF
           # Maintainer: Umar Alfarouk <medrivia@gmail.com>
-          _pkgname=mdrv-db
-          pkgname=mdrv-db-bin
+          pkgname=mdrv-db
           pkgver=$V
           pkgrel=1
           pkgdesc="Fjall durability envelope around a SQL data port and content-addressed blob store (fleet CLI)"
           arch=('x86_64' 'aarch64')
-          url="https://github.com/mdrv/mdrv-db"
+          url="https://crates.io/crates/mdrv-db"
           license=('MIT')
-          provides=("mdrv-db=\$pkgver")
-          conflicts=('mdrv-db')
+          makedepends=('cargo')
           options=('!debug')
-          source_x86_64=("\$_pkgname-x86_64-\$pkgver.tar.gz::\$url/releases/download/v\$pkgver/mdrv-db-x86_64-unknown-linux-gnu.tar.gz")
-          source_aarch64=("\$_pkgname-aarch64-\$pkgver.tar.gz::\$url/releases/download/v\$pkgver/mdrv-db-aarch64-unknown-linux-gnu.tar.gz")
-          sha256sums_x86_64=('$X86')
-          sha256sums_aarch64=('$ARM')
+          source=("mdrv-db-\$pkgver.crate::https://static.crates.io/crates/mdrv-db/mdrv-db-\$pkgver.crate")
+          sha256sums=('$CK')
+
+          build() {
+            cd "mdrv-db-\$pkgver"
+            cargo build --release --locked
+          }
 
           package() {
-            cd "\$srcdir/$_pkgname-\$CARCH-unknown-linux-gnu"
-            install -Dm755 mdrv-db "\$pkgdir/usr/bin/mdrv-db"
+            cd "mdrv-db-\$pkgver"
+            install -Dm755 target/release/mdrv-db "\$pkgdir/usr/bin/mdrv-db"
+            ./target/release/mdrv-db completion > mdrv-db.yaml
             install -Dm644 mdrv-db.yaml "\$pkgdir/usr/share/carapace/specs/mdrv-db.yaml"
-            install -Dm644 README.md "\$pkgdir/usr/share/doc/\$_pkgname/README.md"
+            install -Dm644 README.md "\$pkgdir/usr/share/doc/\$pkgname/README.md"
+            install -Dm644 LICENSE "\$pkgdir/usr/share/licenses/\$pkgname/LICENSE"
           }
           EOF
           chown -R builder:builder /home/builder/aur
