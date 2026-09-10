@@ -1,0 +1,28 @@
+[package]
+name = "mdrv-db"
+description = "mdrv-db: Fjall durability envelope around a SQL data port + content-addressed blob store, with a fleet CLI"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "mdrv_db"
+path = "src/lib.rs"
+
+[[bin]]
+name = "mdrv-db"
+path = "src/main.rs"
+
+[dependencies]
+regex = { workspace = true }
+fjall = { workspace = true }
+serde = { workspace = true }
+postcard = { workspace = true }
+serde_json = { workspace = true }
+blake3 = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+clap = { workspace = true }
+clap_complete = { workspace = true }
+carapace_spec_clap = { workspace = true }
+toml = { workspace = true }
