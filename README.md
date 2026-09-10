@@ -20,7 +20,7 @@ first-class, all inspectable offline.
 | Fleet config (`~/.config/mdrv-db/config.toml`)                   | ✅ read/check/set via CLI                                                         |
 | `@mdrv/db` npm binding (napi) v2 (x64 + arm64, streaming blobs)  | ✅ published (crates.io + npm 0.2.1)                                              |
 | `@mdrv/db-events` (outbox + `/events` + consumer poller)         | ✅ in repo (`packages/db-events`)                                                  |
-| `daemon run` / `daemon install` (scheduler, admin REST, console) | ⏳ next                                                                            |
+| `daemon run` / `status` / `install` (scheduler: backup, verify, retention) | ✅ shipped (admin REST still ⏳)                                        |
 | Console (fleet dashboard, log viewer, backup browser)            | ⏳ after daemon (`packages/console`, read-mostly)                                   |
 
 ## Layout (per-database)
@@ -29,6 +29,7 @@ first-class, all inspectable offline.
 /x/db/<slug>/
 ├── live/        ← owned engine: live/fjall/ + live/app.db + live/blobs/   (rsync: IGNORE)
 └── recovery/    ← backup output: <ts>-offline/{manifest.json, app.db, fjall/, blobs/}  (rsync: THIS)
+├── daemon-state.json ← daemon run log (last/next run, result, backup)             
 ```
 
 `live` is single-owner (fjall + turso file locks); `recovery` is safe to sync offsite.
@@ -62,6 +63,10 @@ mdrv-db verify /x/db/main.example.id                 # WAL hashes, blob re-hash,
 mdrv-db backup /x/db/main.example.id                 # → recovery/<ts>-offline + manifest (blake3)
 mdrv-db restore /x/db/main.example.id/recovery/<ts>-offline --data-dir /x/db/main.example.id
 mdrv-db checkpoint /x/db/main.example.id --compact   # prune WAL ≤ applied_lsn (+ major compact)
+mdrv-db daemon run --once                            # run every scheduled job now, then exit
+mdrv-db daemon run                                   # scheduler loop (cron per [db.*.backup])
+mdrv-db daemon status                                # per-slug last/next run, result, backups
+mdrv-db daemon install                               # systemd --user unit for `daemon run`
 ```
 
 `dump` runs fully offline (stopped owner or `recovery` copy); `verify|backup|restore|
@@ -108,10 +113,9 @@ mdrv-db restore /tmp/mig --data-dir /x/db/<slug>      # writes the NEW live/ lay
 
 ## Roadmap
 
-- **P2** — `mdrv-db serve`: fleet daemon (scheduler: backup/verify/retention incl. restore
-  verification; relays admin RPC to up owners, offline-copies down ones).
-- **next** — daemon (`mdrv-db daemon run|install`): scheduler (backup / verify /
-  restore-verify), admin REST, hosts the console; listen 127.0.0.1:8300 (config-overridable).
+- **P2 (scheduler, done)** — `mdrv-db daemon run|status|install`: per-slug cron from
+  `[db.<slug>.backup]`; each job = backup → verify → checkpoint → retention prune
+  (newest always kept); a running owner is a clean skip, retried next occurrence.
 - **then** — console (`packages/console`, Svelte 5 + vanilla-extract + LogTape), read-mostly.
 - releases: bump manifests → commit → tag `vX.Y.Z` (CI publishes crates.io + npm + AUR).
 

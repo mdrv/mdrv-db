@@ -4,6 +4,7 @@
 //! blobs/) + <data-dir>/recovery (backup output; rsync target).
 
 mod config;
+mod daemon;
 mod dump;
 mod port_turso;
 mod selftest;
@@ -194,7 +195,12 @@ enum Cmd {
         #[arg(long)]
         name: Option<String>,
     },
-    /// Start the fleet daemon (admin REST, scheduler, website) — later phase
+    /// Fleet daemon: scheduled backups + retention from the fleet config
+    Daemon {
+        #[command(subcommand)]
+        sub: DaemonCmd,
+    },
+    /// Host the admin REST API + website — later phase (see `daemon` for scheduled backups)
     Serve,
     /// Inspect the fleet config ($MDRV_DB_CONFIG or ~/.config/mdrv-db/config.toml)
     Config {
@@ -236,6 +242,28 @@ enum Cmd {
         #[command(subcommand)]
         cmd: Option<CompletionCmd>,
     },
+}
+
+#[derive(Subcommand)]
+enum DaemonCmd {
+    /// Run the scheduler loop (--once runs every job immediately and exits)
+    Run {
+        /// Only this fleet slug
+        slug: Option<String>,
+        /// Run every job once now, ignoring schedules, then exit
+        #[arg(long)]
+        once: bool,
+        /// Poll interval in seconds
+        #[arg(long, default_value_t = 15)]
+        interval_secs: u64,
+    },
+    /// Show per-slug daemon state (last run, next run, result, backups)
+    Status {
+        /// Only this fleet slug
+        slug: Option<String>,
+    },
+    /// Write a systemd user unit for `daemon run`
+    Install,
 }
 
 #[derive(Subcommand)]
@@ -459,6 +487,15 @@ fn main() -> ExitCode {
             let n = e.checkpoint(false).map_err(|x| x.to_string())?;
             Ok(format!("prune ok ({n})"))
         }),
+        Cmd::Daemon { sub } => match sub {
+            DaemonCmd::Run {
+                slug,
+                once,
+                interval_secs,
+            } => daemon::run(slug.as_deref(), once, interval_secs),
+            DaemonCmd::Status { slug } => daemon::status(slug.as_deref()),
+            DaemonCmd::Install => daemon::install(),
+        },
         Cmd::Blob { op } => match op {
             BlobOp::Put {
                 data_dir,

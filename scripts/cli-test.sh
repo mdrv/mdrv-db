@@ -110,6 +110,42 @@ OUT=$($BIN checkpoint "$DB" --compact 2>&1); check "checkpoint --compact" 0 $?
 OUT=$($BIN prune "$DB" 2>&1); check "prune" 0 $?
 OUT=$($BIN verify "$DB" 2>&1); check "verify after checkpoint" 0 $?
 
+# --- 8b. fleet daemon (isolated config: scheduled backup + verify + retention) ---
+DCFG=$T/daemon.toml
+cat > "$DCFG" << EOF
+[db.dtest]
+data_dir = "$T/dtest"
+
+[db.dtest.backup]
+cron = "0 3 * * *"
+retention_days = 7
+EOF
+OUT=$(MDRV_DB_CONFIG=$DCFG $BIN init "$T/dtest" 2>&1); check "daemon: init dtest" 0 $?
+OUT=$(MDRV_DB_CONFIG=$DCFG $BIN daemon run dtest --once 2>&1); check "daemon run --once" 0 $?
+expect_contains "daemon job reports ok" "$OUT" "\[dtest\] ok"
+[ -f "$T/dtest/daemon-state.json" ] && ok "daemon state written" || bad "daemon state missing"
+OUT=$(MDRV_DB_CONFIG=$DCFG $BIN daemon status 2>&1); check "daemon status" 0 $?
+expect_contains "status shows dtest" "$OUT" "dtest"
+N1=$(ls -1d "$T/dtest/recovery/"*-daemon 2>/dev/null | wc -l)
+MDRV_DB_CONFIG=$DCFG $BIN daemon run dtest --once >/dev/null 2>&1
+N2=$(ls -1d "$T/dtest/recovery/"*-daemon 2>/dev/null | wc -l)
+[ "$N1" = 1 ] && [ "$N2" = 2 ] && ok "second run adds a backup" || bad "backup count $N1 -> $N2"
+sed -i 's/retention_days = 7/retention_days = 0/' "$DCFG"
+MDRV_DB_CONFIG=$DCFG $BIN daemon run dtest --once >/dev/null 2>&1
+N3=$(ls -1d "$T/dtest/recovery/"*-daemon 2>/dev/null | wc -l)
+[ "$N3" = 1 ] && ok "retention prunes old, keeps newest" || bad "retention left $N3 backups"
+cat > "$DCFG" << EOF
+[db.bad]
+data_dir = "$T/nodir"
+
+[db.bad.backup]
+cron = "not a cron"
+EOF
+OUT=$(MDRV_DB_CONFIG=$DCFG $BIN daemon run --once 2>&1); check "bad cron rejected" 1 $?
+expect_contains "bad cron message" "$OUT" "bad cron"
+OUT=$(MDRV_DB_CONFIG=$DCFG $BIN daemon status 2>&1); check "status rejects bad cron" 1 $?
+OUT=$(MDRV_DB_CONFIG=$DCFG $BIN daemon run ghost --once 2>&1); check "unknown slug rejected" 1 $?
+
 # --- 9. streaming blob put: 120 MiB random file, hash must match sha256sum
 HEAD=$(dirname "$DB")
 BIG=$T/big.bin
