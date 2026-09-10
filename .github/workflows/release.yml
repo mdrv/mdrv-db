@@ -14,10 +14,23 @@ jobs:
         include:
           - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu }
           - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu }
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-musl }
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-musl }
     runs-on: ${{ matrix.os }}
+    env:
+      # cc-rs C deps (zstd-sys, mimalloc-sys, simsimd, blake3) need a musl
+      # cc when building the musl targets; each runner is host-native, so
+      # musl-gcc always matches the one target built there. Harmless for GNU.
+      CC_x86_64_unknown_linux_musl: musl-gcc
+      CC_aarch64_unknown_linux_musl: musl-gcc
     steps:
       - uses: actions/checkout@v7
+      - name: Install musl tools
+        if: contains(matrix.target, 'musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
       - name: Check version sync (tag == crate == packages)
         run: |
@@ -26,10 +39,12 @@ jobs:
           grep -q "\"version\": \"$V\"" packages/db/package.json
           grep -q "\"version\": \"$V\"" packages/db-config/package.json
       - name: Build CLI
-        run: cargo build --release --locked -p mdrv-db
+        run: cargo build --release --locked --target ${{ matrix.target }} -p mdrv-db
+      - name: Smoke the binary
+        run: target/${{ matrix.target }}/release/mdrv-db --version
       - name: Package
         run: |
-          B=target/release/mdrv-db
+          B=target/${{ matrix.target }}/release/mdrv-db
           $B completion > mdrv-db.yaml
           V="${GITHUB_REF_NAME#v}"
           D=mdrv-db-v$V-${{ matrix.target }}
