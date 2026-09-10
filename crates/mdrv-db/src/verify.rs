@@ -34,10 +34,8 @@ pub fn run(engine: &Engine) -> Result<serde_json::Value, MdrvDbError> {
             continue;
         }
         // decode sanity for committed entries
-        if mark[0] == MARK_COMMITTED {
-            if postcard::from_bytes::<TxEntry>(&v).is_err() {
-                anomalies.push(format!("lsn {lsn}: committed entry undecodable"));
-            }
+        if mark[0] == MARK_COMMITTED && postcard::from_bytes::<TxEntry>(&v).is_err() {
+            anomalies.push(format!("lsn {lsn}: committed entry undecodable"));
         }
         checked += 1;
     }

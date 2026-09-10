@@ -16,7 +16,9 @@ pub mod port;
 pub mod verify;
 
 pub use blob::BlobStore;
-pub use engine::{Engine, EngineConfig, ExecuteOutcome, MdrvDbError, MutateRequest, RecoveryReport};
+pub use engine::{
+    Engine, EngineConfig, ExecuteOutcome, MdrvDbError, MutateRequest, RecoveryReport,
+};
 pub use entry::{Op, PortValue, SqlKind, TxEntry, ENTRY_SCHEMA};
 pub use port::{DataPort, Stmt};
 
@@ -31,6 +33,9 @@ pub fn now_ms() -> i64 {
 /// exists, otherwise the root itself (flat layout, v1-compatible).
 pub fn live_dir(root: &std::path::Path) -> std::path::PathBuf {
     let live = root.join("live");
-    if live.is_dir() { live } else { root.to_path_buf() }
+    if live.is_dir() {
+        live
+    } else {
+        root.to_path_buf()
+    }
 }
-

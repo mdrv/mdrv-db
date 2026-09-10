@@ -42,7 +42,10 @@ impl TursoPort {
                 Ok::<turso::Connection, turso::Error>(conn)
             })
             .map_err(|e: turso::Error| e.to_string())?;
-        Ok(TursoPort { rt, conn: std::sync::Mutex::new(conn) })
+        Ok(TursoPort {
+            rt,
+            conn: std::sync::Mutex::new(conn),
+        })
     }
 }
 
@@ -80,7 +83,10 @@ impl DataPort for TursoPort {
             let mut total = 0u64;
             for s in stmts {
                 let params = to_turso_params(&s.params).map_err(|e| e.to_string())?;
-                total += tx.execute(&s.sql, params).await.map_err(|e| e.to_string())?;
+                total += tx
+                    .execute(&s.sql, params)
+                    .await
+                    .map_err(|e| e.to_string())?;
             }
             tx.commit().await.map_err(|e| e.to_string())?;
             Ok(total)
@@ -107,7 +113,9 @@ impl DataPort for TursoPort {
                 let n = row.column_count();
                 let mut r = Vec::with_capacity(n);
                 for i in 0..n {
-                    r.push(from_turso_value(row.get_value(i).map_err(|e| e.to_string())?));
+                    r.push(from_turso_value(
+                        row.get_value(i).map_err(|e| e.to_string())?,
+                    ));
                 }
                 out.push(r);
             }
@@ -200,7 +208,9 @@ impl MdrvDb {
             inner.with(|e| {
                 let req: MutateRequest = serde_json::from_str(&request_json)
                     .map_err(|e| Error::from_reason(format!("bad request json: {e}")))?;
-                let out = e.execute(req).map_err(|e| Error::from_reason(e.to_string()))?;
+                let out = e
+                    .execute(req)
+                    .map_err(|e| Error::from_reason(e.to_string()))?;
                 Ok(serde_json::to_string(&out).unwrap())
             })
         })
@@ -219,7 +229,9 @@ impl MdrvDb {
                         .map_err(|e| Error::from_reason(format!("bad params json: {e}")))?,
                     _ => Vec::new(),
                 };
-                let rows = e.query(&sql, params).map_err(|e| Error::from_reason(e.to_string()))?;
+                let rows = e
+                    .query(&sql, params)
+                    .map_err(|e| Error::from_reason(e.to_string()))?;
                 Ok(serde_json::to_string(&rows).unwrap())
             })
         })
@@ -235,7 +247,8 @@ impl MdrvDb {
             inner.with(|e| {
                 let stmts: Vec<String> = serde_json::from_str(&statements_json)
                     .map_err(|e| Error::from_reason(format!("bad statements json: {e}")))?;
-                e.bootstrap(&stmts).map_err(|e| Error::from_reason(e.to_string()))
+                e.bootstrap(&stmts)
+                    .map_err(|e| Error::from_reason(e.to_string()))
             })
         })
         .await
@@ -250,8 +263,9 @@ impl MdrvDb {
         let bytes = bytes.to_vec();
         tokio::task::spawn_blocking(move || {
             inner.with(|e| {
-                let (hash, size) =
-                    e.put_blob(&bytes).map_err(|e| Error::from_reason(e.to_string()))?;
+                let (hash, size) = e
+                    .put_blob(&bytes)
+                    .map_err(|e| Error::from_reason(e.to_string()))?;
                 Ok(serde_json::to_string(&json!({ "hash": hash, "size": size })).unwrap())
             })
         })
@@ -271,11 +285,7 @@ impl MdrvDb {
             let up = e
                 .blob_upload_begin()
                 .map_err(|err| Error::from_reason(err.to_string()))?;
-            self.inner
-                .uploads
-                .lock()
-                .unwrap()
-                .insert(id.clone(), up);
+            self.inner.uploads.lock().unwrap().insert(id.clone(), up);
             Ok(id)
         })
     }
@@ -328,7 +338,11 @@ impl MdrvDb {
     pub fn get_blob_path(&self, hash_hex: String) -> Result<Option<String>> {
         self.inner.with(|e| {
             let p = e.blobs.final_path(&hash_hex);
-            Ok(if p.is_file() { Some(p.display().to_string()) } else { None })
+            Ok(if p.is_file() {
+                Some(p.display().to_string())
+            } else {
+                None
+            })
         })
     }
 
@@ -381,8 +395,7 @@ impl MdrvDb {
         let inner = self.inner.clone();
         tokio::task::spawn_blocking(move || {
             inner.with(|e| {
-                let out =
-                    mdrv_db::verify::run(e).map_err(|e| Error::from_reason(e.to_string()))?;
+                let out = mdrv_db::verify::run(e).map_err(|e| Error::from_reason(e.to_string()))?;
                 Ok(serde_json::to_string(&out).unwrap())
             })
         })
@@ -420,7 +433,8 @@ impl MdrvDb {
         tokio::task::spawn_blocking(move || {
             let mut guard = inner.engine.lock().unwrap();
             if let Some(e) = guard.as_ref() {
-                e.persist_sync_all().map_err(|e| Error::from_reason(e.to_string()))?;
+                e.persist_sync_all()
+                    .map_err(|e| Error::from_reason(e.to_string()))?;
             }
             *guard = None; // drop Engine → release lock
             Ok(())

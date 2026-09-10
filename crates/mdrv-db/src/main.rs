@@ -282,7 +282,8 @@ fn completion_install() -> Result<std::path::PathBuf, String> {
     let config_dir = match std::env::var("XDG_CONFIG_HOME") {
         Ok(v) if !v.is_empty() => std::path::PathBuf::from(v),
         _ => std::path::PathBuf::from(
-            std::env::var("HOME").map_err(|_| "cannot resolve config dir: no XDG_CONFIG_HOME or HOME")?,
+            std::env::var("HOME")
+                .map_err(|_| "cannot resolve config dir: no XDG_CONFIG_HOME or HOME")?,
         )
         .join(".config"),
     };
@@ -295,7 +296,9 @@ fn completion_install() -> Result<std::path::PathBuf, String> {
 
 fn not_yet(what: &str) -> ExitCode {
     eprintln!("{what} is planned for a later v2 phase.");
-    eprintln!("Meanwhile, v1 tooling (maintenance daemon, admin RPC) lives in the private v1 archive.");
+    eprintln!(
+        "Meanwhile, v1 tooling (maintenance daemon, admin RPC) lives in the private v1 archive."
+    );
     ExitCode::from(1)
 }
 
@@ -329,18 +332,20 @@ fn main() -> ExitCode {
                 }
                 ExitCode::SUCCESS
             }
-            Some(CompletionCmd::Install) => match completion_install() {
-                Ok(path) => {
-                    println!("spec installed: {}", path.display());
-                    println!("carapace-bin loads user specs ONLY from this dir");
-                    println!("(system-wide /usr/share/carapace/specs is ignored as of 1.7.3).");
-                    println!("Completions also need the carapace shell hook (carapace <shell> init in");
-                    println!("your shell rc). Test: carapace mdrv-db nushell mdrv-db ''");
-                    ExitCode::SUCCESS
-                }
-                Err(e) => {
-                    eprintln!("completion install failed: {e}");
-                    ExitCode::from(1)
+            Some(CompletionCmd::Install) => {
+                match completion_install() {
+                    Ok(path) => {
+                        println!("spec installed: {}", path.display());
+                        println!("carapace-bin loads user specs ONLY from this dir");
+                        println!("(system-wide /usr/share/carapace/specs is ignored as of 1.7.3).");
+                        println!("Completions also need the carapace shell hook (carapace <shell> init in");
+                        println!("your shell rc). Test: carapace mdrv-db nushell mdrv-db ''");
+                        ExitCode::SUCCESS
+                    }
+                    Err(e) => {
+                        eprintln!("completion install failed: {e}");
+                        ExitCode::from(1)
+                    }
                 }
             }
         },

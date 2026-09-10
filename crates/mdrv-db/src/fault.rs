@@ -25,11 +25,10 @@ fn tag() -> Option<&'static str> {
 
 /// Abort if `MDRV_DB_FAULT` names this point. Test-only; cheap no-op otherwise.
 pub fn abort_if(point: Point) {
-    let hit = match (tag(), point) {
-        (Some("after_persist"), Point::AfterPersist) => true,
-        (Some("after_apply"), Point::AfterApply) => true,
-        _ => false,
-    };
+    let hit = matches!(
+        (tag(), point),
+        (Some("after_persist"), Point::AfterPersist) | (Some("after_apply"), Point::AfterApply)
+    );
     if hit {
         std::process::abort();
     }

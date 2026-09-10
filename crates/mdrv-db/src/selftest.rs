@@ -135,7 +135,10 @@ fn judge(dir: &Path, progress: &Path) -> Result<(usize, i64), String> {
     let v = v?;
     let ok = v.get("ok").and_then(|b| b.as_bool()).unwrap_or(false);
     if !complete {
-        return Err(format!("primary rows {n} < acked {} (LOST writes)", acked.len()));
+        return Err(format!(
+            "primary rows {n} < acked {} (LOST writes)",
+            acked.len()
+        ));
     }
     if !ok {
         return Err(format!("verify anomalies: {:?}", v.get("anomalies")));

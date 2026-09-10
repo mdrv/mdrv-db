@@ -401,19 +401,21 @@ impl Engine {
                 pruned += 1;
             }
         }
-        if pruned > 0 {
-            if b.commit().is_ok() {
-                let _ = self.report(
-                    20,
-                    "idem.prune",
-                    Some(serde_json::json!({"pruned": pruned})),
-                );
-            }
+        if pruned > 0 && b.commit().is_ok() {
+            let _ = self.report(
+                20,
+                "idem.prune",
+                Some(serde_json::json!({"pruned": pruned})),
+            );
         }
     }
 
     /// Read-only SELECT path. Rejects anything that is not a SELECT.
-    pub fn query(&self, sql: &str, params: Vec<PortValue>) -> Result<serde_json::Value, MdrvDbError> {
+    pub fn query(
+        &self,
+        sql: &str,
+        params: Vec<PortValue>,
+    ) -> Result<serde_json::Value, MdrvDbError> {
         let t = sql.trim_start();
         let head = t
             .as_bytes()
