@@ -78,13 +78,9 @@ pub fn run(file: Option<PathBuf>, check: bool, set: Option<String>) -> ExitCode 
     println!("config: {}", path.display());
     if let Some(sched) = cfg.get("sched") {
         println!(
-            "sched:  data_root={} backup_root={}",
+            "sched:  data_root={}",
             sched
                 .get("data_root")
-                .and_then(|v| v.as_str())
-                .unwrap_or("-"),
-            sched
-                .get("backup_root")
                 .and_then(|v| v.as_str())
                 .unwrap_or("-"),
         );

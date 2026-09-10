@@ -84,7 +84,6 @@ verify = "weekly"
 
 [sched]
 data_root = "/x/db"
-backup_root = "/x/db-backups"
 
 [db.mid]
 name = "Example App"

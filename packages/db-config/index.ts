@@ -57,7 +57,7 @@ export interface DbConfig {
 
 export interface MdrvDbConfig {
 	defaults?: { durability?: Durability; verify?: string }
-	sched?: { data_root?: string; backup_root?: string }
+	sched?: { data_root?: string }
 	db: Record<string, DbConfig>
 }
 

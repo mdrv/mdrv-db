@@ -34,7 +34,6 @@ cat > "$T/config.toml" << 'EOF'
 durability = "per-write"
 [sched]
 data_root = "/x/db"
-backup_root = "/x/db-backups"
 [db.t1]
 name = "Test One"
 data_dir = "$T/t1"
