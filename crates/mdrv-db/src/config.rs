@@ -9,7 +9,17 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+static OVERRIDE: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
+
+/// `--config <path>` global flag; takes precedence over $MDRV_CONFIG.
+pub fn set_override(p: Option<PathBuf>) {
+    let _ = OVERRIDE.set(p);
+}
+
 pub fn default_path() -> Option<PathBuf> {
+    if let Some(p) = OVERRIDE.get().and_then(|o| o.as_ref()) {
+        return Some(p.clone());
+    }
     if let Ok(p) = std::env::var("MDRV_CONFIG") {
         return Some(PathBuf::from(p));
     }

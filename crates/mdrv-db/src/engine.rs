@@ -1,7 +1,7 @@
 //! The engine: WAL-first write path, status lifecycle, recovery-on-open,
 //! checkpoint/prune. One engine owns one data dir (fjall + blobs + port).
 
-use crate::blob::BlobStore;
+use crate::blob::{BlobStore, BlobUpload};
 use crate::entry::{
     Op, PortValue, ReportEntry, SqlKind, TxEntry, ENTRY_SCHEMA, MARK_ABORTED, MARK_COMMITTED,
     MARK_LEN, MARK_PENDING,
@@ -342,6 +342,34 @@ impl Engine {
         let hash = BlobStore::hash(bytes);
         self.blobs.stage(&hash, bytes)?;
         Ok((hash, bytes.len() as u64))
+    }
+
+    /// Begin a streaming blob upload (arbitrary size; chunks never fully
+    /// buffered). Feed the returned handle, then `blob_upload_finish`.
+    /// The resulting blob is unreferenced until an `execute` carries its
+    /// `BlobPut` op — unreferenced blobs are reported (not deleted) by
+    /// verify, and removed with `BlobDrop`.
+    pub fn blob_upload_begin(&self) -> Result<BlobUpload, MdrvError> {
+        let id = format!(
+            "{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.subsec_nanos())
+                .unwrap_or(0)
+        );
+        self.blobs.upload_begin(&id).map_err(MdrvError::from)
+    }
+
+    /// Finish a streaming upload: returns (hash_hex, bytes_written).
+    pub fn blob_upload_finish(&self, up: BlobUpload) -> Result<(String, u64), MdrvError> {
+        up.finish(&self.blobs).map_err(MdrvError::from)
+    }
+
+    /// Final (committed) blob path by hash, if present.
+    pub fn blob_path(&self, hash_hex: &str) -> Option<std::path::PathBuf> {
+        let p = self.blobs.final_path(hash_hex);
+        p.is_file().then_some(p)
     }
 
     /// Bounded TTL sweep of the idempotency cache. Samples one 1/256 slice

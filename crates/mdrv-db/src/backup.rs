@@ -42,6 +42,7 @@ pub fn run(engine: &Engine, dest: impl AsRef<Path>) -> Result<BackupOutcome, Mdr
         "applied_lsn": engine.applied.load(std::sync::atomic::Ordering::SeqCst),
         "created_at": crate::now_ms(),
         "entry_schema": crate::ENTRY_SCHEMA,
+        "engine_version": env!("CARGO_PKG_VERSION"),
         "files": files,
     });
     fs::write(dest.join("manifest.json"), manifest.to_string())?;

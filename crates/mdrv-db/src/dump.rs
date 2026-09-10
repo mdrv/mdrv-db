@@ -31,7 +31,9 @@ pub fn open(dir: &Path) -> Result<Open, String> {
     };
     let fjall_dir = live.join("fjall");
     if !fjall_dir.is_dir() {
-        return Err(format!("{fjall_dir:?} does not exist (not initialized or wrong dir)"));
+        return Err(format!(
+            "{fjall_dir:?} does not exist (not initialized or wrong dir)"
+        ));
     }
     let db = fjall::Database::builder(&fjall_dir)
         .open()

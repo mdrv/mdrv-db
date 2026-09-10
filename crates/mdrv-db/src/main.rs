@@ -6,13 +6,14 @@
 mod config;
 mod dump;
 mod port_turso;
+mod selftest;
 
 use clap::{CommandFactory, Parser, Subcommand, ValueHint};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 /// Engine name: explicit flag, else fleet-config lookup by data_dir,
-/// else the directory's file name.
+/// else the engine's own meta.db_name, else the directory's file name.
 fn resolve_name(data_dir: &std::path::Path, name: &Option<String>) -> String {
     if let Some(n) = name {
         return n.clone();
@@ -22,10 +23,25 @@ fn resolve_name(data_dir: &std::path::Path, name: &Option<String>) -> String {
             return n;
         }
     }
+    if let Some(n) = read_meta_name(data_dir) {
+        return n;
+    }
     data_dir
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| "unnamed".into())
+}
+
+/// Read the engine's recorded db_name straight from the fjall envelope
+/// (read-only, no port). Returns None when there is no envelope yet.
+fn read_meta_name(data_dir: &std::path::Path) -> Option<String> {
+    let root = port_turso::live_dir(data_dir);
+    let db = fjall::Database::builder(root.join("fjall")).open().ok()?;
+    let meta = db
+        .keyspace("meta", fjall::KeyspaceCreateOptions::default)
+        .ok()?;
+    let v = meta.get("db_name").ok()??;
+    String::from_utf8(v.to_vec()).ok()
 }
 
 fn engine_op(
@@ -34,7 +50,7 @@ fn engine_op(
     f: impl FnOnce(&mut mdrv_db::Engine) -> Result<String, String>,
 ) -> ExitCode {
     let n = resolve_name(data_dir, name);
-    let mut engine = match port_turso::open_engine(data_dir, &n) {
+    let mut engine = match port_turso::open_engine(data_dir, &n, true, false) {
         Ok(e) => e,
         Err(e) => {
             eprintln!("{e}");
@@ -73,7 +89,9 @@ fn copy_dir(src: &std::path::Path, dst: &std::path::Path) -> Result<u64, String>
 /// Copy a backup (manifest.json + app.db + fjall/ + blobs/) into <data-dir>/live.
 fn restore_copy(backup_dir: &std::path::Path, data_dir: &std::path::Path) -> Result<(), String> {
     if !backup_dir.join("manifest.json").is_file() {
-        return Err(format!("{backup_dir:?} has no manifest.json — not a backup"));
+        return Err(format!(
+            "{backup_dir:?} has no manifest.json — not a backup"
+        ));
     }
     if data_dir.join("live").join("fjall").exists() {
         return Err(format!(
@@ -104,6 +122,9 @@ fn restore_copy(backup_dir: &std::path::Path, data_dir: &std::path::Path) -> Res
     about = "mdrv-db fleet CLI — offline inspection and lifecycle ops for Fjall-enveloped databases"
 )]
 struct Cli {
+    /// Fleet config path (default: $MDRV_CONFIG or ~/.config/mdrv-db/config.toml)
+    #[arg(long, global = true, value_hint = ValueHint::FilePath)]
+    config: Option<PathBuf>,
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -184,9 +205,56 @@ enum Cmd {
         #[arg(long)]
         set: Option<String>,
     },
+    /// Blob store operations (content-addressed, streamed)
+    Blob {
+        #[command(subcommand)]
+        op: BlobOp,
+    },
+    /// Crash-injection matrix: children write acked entries and abort at
+    /// pipeline points; the parent asserts durability + verify
+    Selftest {
+        /// Scratch root for the scenario databases
+        #[arg(default_value = "/tmp/mdrv-db-selftest", value_hint = ValueHint::DirPath)]
+        root: PathBuf,
+    },
+    /// Internal: selftest child (hidden)
+    #[command(hide = true)]
+    SelftestChild {
+        dir: PathBuf,
+        /// fault point: - | after_persist | after_apply
+        fault: String,
+        /// fsync each write (1/0)
+        fsync: String,
+        /// abort after this many acked writes (0 = never)
+        abort_after: u64,
+        progress: PathBuf,
+    },
     /// Emit a carapace completion spec:
     /// mdrv-db completion > ~/.config/carapace/specs/mdrv-db.yaml
     Completion,
+}
+
+#[derive(Subcommand)]
+enum BlobOp {
+    /// Stream a file into the content-addressed blob store (no DB write;
+    /// reference it with a BlobPut op to make it durable)
+    Put {
+        #[arg(value_hint = ValueHint::DirPath)]
+        data_dir: PathBuf,
+        /// File to ingest (streamed in chunks, never fully buffered)
+        #[arg(long, value_hint = ValueHint::FilePath)]
+        file: PathBuf,
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// Print the store path of a committed blob by hash
+    Get {
+        #[arg(value_hint = ValueHint::DirPath)]
+        data_dir: PathBuf,
+        hash: String,
+        #[arg(long)]
+        name: Option<String>,
+    },
 }
 
 fn not_yet(what: &str) -> ExitCode {
@@ -197,10 +265,16 @@ fn not_yet(what: &str) -> ExitCode {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    config::set_override(cli.config.clone());
     match cli.cmd {
         Cmd::Completion => {
             let mut cmd = Cli::command();
-            clap_complete::generate(carapace_spec_clap::Spec, &mut cmd, "mdrv-db", &mut std::io::stdout());
+            clap_complete::generate(
+                carapace_spec_clap::Spec,
+                &mut cmd,
+                "mdrv-db",
+                &mut std::io::stdout(),
+            );
             ExitCode::SUCCESS
         }
         Cmd::Init { data_dir } => {
@@ -212,20 +286,58 @@ fn main() -> ExitCode {
                     return ExitCode::from(1);
                 }
             }
-            println!("initialized {} (live/ + recovery/)", data_dir.display());
-            ExitCode::SUCCESS
+            let n = resolve_name(&data_dir, &None);
+            match port_turso::open_engine(&data_dir, &n, true, true) {
+                Ok(mut e) => {
+                    let applied = e
+                        .status()
+                        .get("applied_lsn")
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(0);
+                    e.close().ok();
+                    println!(
+                        "initialized {} (live/ + recovery/, name '{n}', applied_lsn {applied})",
+                        data_dir.display()
+                    );
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("{e}");
+                    ExitCode::from(1)
+                }
+            }
         }
         Cmd::Info { data_dir } => dump::info(&data_dir),
         Cmd::Dump { sub } => dump::run(sub),
-        Cmd::Verify { data_dir, name } => engine_op(&data_dir, &name, |e| {
-            let v = mdrv_db::verify::run(e).map_err(|x| x.to_string())?;
-            let ok = v.get("ok").and_then(|b| b.as_bool()).unwrap_or(false);
-            if ok {
-                Ok(format!("verify OK\n{v}"))
-            } else {
-                Err(format!("verify FAILED\n{v}"))
+        Cmd::Verify { data_dir, name } => {
+            if data_dir.join("manifest.json").is_file() {
+                return match mdrv_db::verify::run_backup(&data_dir) {
+                    Ok(v) => {
+                        let ok = v.get("ok").and_then(|b| b.as_bool()).unwrap_or(false);
+                        if ok {
+                            println!("backup verify OK\n{v}");
+                            ExitCode::SUCCESS
+                        } else {
+                            eprintln!("backup verify FAILED\n{v}");
+                            ExitCode::from(1)
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("{e}");
+                        ExitCode::from(1)
+                    }
+                };
             }
-        }),
+            engine_op(&data_dir, &name, |e| {
+                let v = mdrv_db::verify::run(e).map_err(|x| x.to_string())?;
+                let ok = v.get("ok").and_then(|b| b.as_bool()).unwrap_or(false);
+                if ok {
+                    Ok(format!("verify OK\n{v}"))
+                } else {
+                    Err(format!("verify FAILED\n{v}"))
+                }
+            })
+        }
         Cmd::Backup {
             data_dir,
             dest,
@@ -275,6 +387,43 @@ fn main() -> ExitCode {
             let n = e.checkpoint(false).map_err(|x| x.to_string())?;
             Ok(format!("prune ok ({n})"))
         }),
+        Cmd::Blob { op } => match op {
+            BlobOp::Put {
+                data_dir,
+                file,
+                name,
+            } => engine_op(&data_dir, &name, |e| {
+                let mut up = e.blob_upload_begin().map_err(|x| x.to_string())?;
+                let mut f = std::fs::File::open(&file).map_err(|x| x.to_string())?;
+                let mut buf = vec![0u8; 1024 * 1024];
+                loop {
+                    use std::io::Read;
+                    let n = f.read(&mut buf).map_err(|x| x.to_string())?;
+                    if n == 0 {
+                        break;
+                    }
+                    up.write(&buf[..n]).map_err(|x| x.to_string())?;
+                }
+                let (hash, bytes) = e.blob_upload_finish(up).map_err(|x| x.to_string())?;
+                Ok(format!("{hash} {bytes}"))
+            }),
+            BlobOp::Get {
+                data_dir,
+                hash,
+                name,
+            } => engine_op(&data_dir, &name, |e| match e.blob_path(&hash) {
+                Some(p) => Ok(p.display().to_string()),
+                None => Err(format!("no blob {hash}")),
+            }),
+        },
+        Cmd::Selftest { root } => selftest::run(&root),
+        Cmd::SelftestChild {
+            dir,
+            fault,
+            fsync,
+            abort_after,
+            progress,
+        } => selftest::child(&dir, &fault, fsync == "1", abort_after, &progress),
         Cmd::Serve => not_yet("serve"),
         Cmd::Config { file, check, set } => config::run(file, check, set),
     }
