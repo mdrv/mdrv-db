@@ -117,13 +117,21 @@ jobs:
         with:
           merge-multiple: true
           path: packages/db
-      - run: npm publish --access public
+      - run: |
+          V=$(grep -o '"version": "[^"]*"' package.json | cut -d'"' -f4)
+          npm view @mdrv/db@$V version >/dev/null 2>&1 || npm publish --access public
         working-directory: packages/db
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-      - run: npm publish --access public
+      - run: |
+          V=$(grep -o '"version": "[^"]*"' package.json | cut -d'"' -f4)
+          npm view @mdrv/db-config@$V version >/dev/null 2>&1 || npm publish --access public
         working-directory: packages/db-config
-      - run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - run: |
+          V=$(grep -o '"version": "[^"]*"' package.json | cut -d'"' -f4)
+          npm view @mdrv/db-events@$V version >/dev/null 2>&1 || npm publish --access public
         working-directory: packages/db-events
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
