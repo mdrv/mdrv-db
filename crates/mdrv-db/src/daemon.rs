@@ -339,6 +339,20 @@ pub fn run(
         .and_then(|v| v.as_str())
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("/x/db"));
+    // [daemon] host/port in the fleet config are the defaults; flags win.
+    let daemon_cfg = cfg.get("daemon");
+    let bind = bind.or_else(|| {
+        daemon_cfg
+            .and_then(|d| d.get("host"))
+            .and_then(|v| v.as_str())
+            .map(str::to_owned)
+    });
+    let port = port.or_else(|| {
+        daemon_cfg
+            .and_then(|d| d.get("port"))
+            .and_then(|v| v.as_integer())
+            .map(|p| p as u16)
+    });
     match server::serve(server::Opts {
         bind,
         port,
