@@ -1,6 +1,6 @@
 {
 	"name": "@mdrv/db-config",
-	"version": "0.3.0",
+	"version": "0.4.0",
 	"license": "MIT",
 	"description": "Typed config + event hooks for the mdrv-db suite",
 	"type": "module",
