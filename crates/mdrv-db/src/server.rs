@@ -273,7 +273,7 @@ async fn backups(
                 daemon::backup_ts(&name).map(|ts| (ts, p))
             })
             .collect();
-        dirs.sort_by(|a, b| b.0.cmp(&a.0));
+        dirs.sort_by_key(|b| std::cmp::Reverse(b.0));
         for (ts, p) in dirs {
             let mut bytes = 0u64;
             let mut files = 0usize;
