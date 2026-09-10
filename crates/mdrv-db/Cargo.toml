@@ -19,7 +19,11 @@ path = "src/main.rs"
 
 [dependencies]
 turso = { workspace = true }
-tokio = { version = "1", features = ["rt"] }
+tokio = { workspace = true }
+axum = { workspace = true }
+tokio-stream = { workspace = true }
+fs2 = { workspace = true }
+include_dir = { workspace = true }
 regex = { workspace = true }
 fjall = { workspace = true }
 serde = { workspace = true }

@@ -20,8 +20,8 @@ first-class, all inspectable offline.
 | Fleet config (`~/.config/mdrv-db/config.toml`)                   | ✅ read/check/set via CLI                                                         |
 | `@mdrv/db` npm binding (napi) v2 (x64 + arm64, streaming blobs)  | ✅ published (crates.io + npm 0.2.1)                                              |
 | `@mdrv/db-events` (outbox + `/events` + consumer poller)         | ✅ in repo (`packages/db-events`)                                                  |
-| `daemon run` / `status` / `install` (scheduler: backup, verify, retention) | ✅ shipped (admin REST still ⏳)                                        |
-| Console (fleet dashboard, log viewer, backup browser)            | ⏳ after daemon (`packages/console`, read-mostly)                                   |
+| `daemon run` / `status` / `install` (scheduler: backup, verify, retention) | ✅ shipped                                                                          |
+| Admin REST + SSE + embedded console (`packages/console`)         | ✅ shipped (v1: read-mostly + backup-now/prune)                                      |
 
 ## Layout (per-database)
 
@@ -64,7 +64,8 @@ mdrv-db backup /x/db/main.example.id                 # → recovery/<ts>-offline
 mdrv-db restore /x/db/main.example.id/recovery/<ts>-offline --data-dir /x/db/main.example.id
 mdrv-db checkpoint /x/db/main.example.id --compact   # prune WAL ≤ applied_lsn (+ major compact)
 mdrv-db daemon run --once                            # run every scheduled job now, then exit
-mdrv-db daemon run                                   # scheduler loop (cron per [db.*.backup])
+mdrv-db daemon run                                   # scheduler + admin REST + console on 127.0.0.1:8300
+mdrv-db daemon run --port 8301 --console ./dist      # flags override config/defaults
 mdrv-db daemon status                                # per-slug last/next run, result, backups
 mdrv-db daemon install                               # systemd --user unit for `daemon run`
 ```
@@ -112,7 +113,13 @@ mdrv-db restore /tmp/mig --data-dir /x/db/<slug>      # writes the NEW live/ lay
 
 ## Roadmap
 
-- **P2 (scheduler, done)** — `mdrv-db daemon run|status|install`: per-slug cron from
+- **P2 (daemon, done)** — `mdrv-db daemon run|status|install`: per-slug cron from
+  `[db.<slug>.backup]`; each job = backup → verify → checkpoint → retention prune
+  (newest always kept); a running owner is a clean skip, retried next occurrence.
+  Server mode adds the admin REST + SSE (`/api/*`, cookie auth via `POST /login`,
+  `MDRV_DB_ADMIN_TOKEN`) and serves the embedded console; host/port overridable via
+  `[daemon]` in the fleet config or `--bind`/`--port` flags. v1 console: fleet
+  dashboard, backup browser, report viewer, backup-now + prune (restore stays CLI).
   `[db.<slug>.backup]`; each job = backup → verify → checkpoint → retention prune
   (newest always kept); a running owner is a clean skip, retried next occurrence.
 - **then** — console (`packages/console`, Svelte 5 + vanilla-extract + LogTape), read-mostly.

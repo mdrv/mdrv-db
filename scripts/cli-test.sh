@@ -144,6 +144,32 @@ OUT=$(MDRV_DB_CONFIG=$DCFG $BIN daemon run --once 2>&1); check "bad cron rejecte
 expect_contains "bad cron message" "$OUT" "bad cron"
 OUT=$(MDRV_DB_CONFIG=$DCFG $BIN daemon status 2>&1); check "status rejects bad cron" 1 $?
 OUT=$(MDRV_DB_CONFIG=$DCFG $BIN daemon run ghost --once 2>&1); check "unknown slug rejected" 1 $?
+
+# --- daemon server mode (REST + SSE + console) ---
+# fresh config: [db.bad] from the bad-cron section would abort boot
+cat > "$DCFG" << EOF
+[db.dtest]
+data_dir = "$T/dtest"
+
+[db.dtest.backup]
+cron = "0 3 * * *"
+retention_days = 7
+EOF
+if command -v curl >/dev/null; then
+    B=http://127.0.0.1:8391
+    MDRV_DB_ADMIN_TOKEN=tok MDRV_DB_CONFIG=$DCFG $BIN daemon run --port 8391 >"$T/daemon-http.log" 2>&1 &
+    DPID=$!
+    sleep 1
+    check "console served" 0 0; [ "$(curl -s -o /dev/null -w '%{http_code}' $B/)" = 200 ] || { echo FAIL: console; FAIL=$((FAIL+1)); }
+    check "api unauthorized" 0 0; [ "$(curl -s -o /dev/null -w '%{http_code}' $B/api/status)" = 401 ] || { echo FAIL: unauth; FAIL=$((FAIL+1)); }
+    curl -s -c "$T/jar" -H 'content-type: application/json' -d '{"token":"tok"}' "$B/login" >/dev/null
+    expect_contains "status json" "$(curl -s -b "$T/jar" $B/api/status)" "dtest"
+    expect_contains "backup-now ok" "$(curl -s -b "$T/jar" -X POST $B/api/slugs/dtest/backup)" '"last_result":"ok"'
+    expect_contains "sse first frame" "$(timeout 3 curl -s -N -b "$T/jar" $B/api/events | head -c 2000)" '"type":"status"'
+    kill $DPID 2>/dev/null; wait $DPID 2>/dev/null
+else
+    echo "skip: curl not available"
+fi
 cat > "$DCFG" << EOF
 [db.alias]
 data_dir = "$T/nodir-alias"

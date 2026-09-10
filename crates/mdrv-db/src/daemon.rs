@@ -1,7 +1,7 @@
 //! Fleet daemon: scheduled backups + retention for every `[db.*]` entry
 //! in the fleet config (`mdrv-db daemon`).
 //!
-//! Increment 1 is scheduler-only (admin REST + website are later phases).
+//! Increment 2 adds the admin REST + SSE + embedded console:
 //! Each tick the run loop checks every job's next-due time (cron under
 //! `[db.<slug>.backup]`); when due, one job runs:
 //!
@@ -14,27 +14,29 @@
 //! simply retries at the next cron occurrence.
 
 use crate::port_turso::open_engine;
+use crate::server;
 use chrono::Local;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-struct Job {
-    slug: String,
-    data_dir: PathBuf,
-    name: Option<String>,
-    cron: Option<String>,
-    retention_days: Option<i64>,
+#[derive(Clone)]
+pub(crate) struct Job {
+    pub(crate) slug: String,
+    pub(crate) data_dir: PathBuf,
+    pub(crate) name: Option<String>,
+    pub(crate) cron: Option<String>,
+    pub(crate) retention_days: Option<i64>,
 }
 
-#[derive(serde::Deserialize, serde::Serialize)]
-struct State {
-    slug: String,
-    last_run_ms: i64,
-    last_result: String,
-    detail: String,
-    next_run_ms: i64,
-    last_backup: Option<String>,
-    applied_lsn: Option<i64>,
+#[derive(Clone, serde::Deserialize, serde::Serialize)]
+pub(crate) struct State {
+    pub(crate) slug: String,
+    pub(crate) last_run_ms: i64,
+    pub(crate) last_result: String,
+    pub(crate) detail: String,
+    pub(crate) next_run_ms: i64,
+    pub(crate) last_backup: Option<String>,
+    pub(crate) applied_lsn: Option<i64>,
 }
 
 fn load_fleet() -> Result<(PathBuf, toml::Value), String> {
@@ -108,7 +110,7 @@ fn next_after(expr: &str, from: chrono::DateTime<Local>) -> Result<i64, String> 
         .ok_or_else(|| format!("cron '{expr}' never fires"))
 }
 
-fn ts(ms: i64) -> String {
+pub(crate) fn ts(ms: i64) -> String {
     chrono::DateTime::from_timestamp_millis(ms)
         .map(|d| {
             d.with_timezone(&Local)
@@ -120,7 +122,7 @@ fn ts(ms: i64) -> String {
 
 /// Backup dirs are `<ms>-offline` / `<ms>-daemon`; the leading digits are
 /// the creation timestamp.
-fn backup_ts(name: &str) -> Option<i64> {
+pub(crate) fn backup_ts(name: &str) -> Option<i64> {
     let digits: String = name.chars().take_while(|c| c.is_ascii_digit()).collect();
     if digits.is_empty() || digits.len() == name.len() {
         return None;
@@ -133,7 +135,10 @@ fn backup_ts(name: &str) -> Option<i64> {
 
 /// Delete expired backup dirs, always keeping the newest. Returns
 /// (kept, removed).
-fn prune_backups(recovery: &Path, retention_days: i64) -> Result<(usize, usize), String> {
+pub(crate) fn prune_backups(
+    recovery: &Path,
+    retention_days: i64,
+) -> Result<(usize, usize), String> {
     let mut dirs: Vec<(i64, PathBuf)> = Vec::new();
     for e in std::fs::read_dir(recovery)
         .map_err(|e| e.to_string())?
@@ -163,7 +168,7 @@ fn prune_backups(recovery: &Path, retention_days: i64) -> Result<(usize, usize),
     Ok((dirs.len() - removed, removed))
 }
 
-fn count_backups(recovery: &Path) -> usize {
+pub(crate) fn count_backups(recovery: &Path) -> usize {
     std::fs::read_dir(recovery)
         .map(|rd| {
             rd.flatten()
@@ -235,14 +240,14 @@ fn save_state(j: &Job, st: &State) {
     }
 }
 
-fn load_state(j: &Job) -> Option<State> {
+pub(crate) fn load_state(j: &Job) -> Option<State> {
     let text = std::fs::read_to_string(j.data_dir.join("daemon-state.json")).ok()?;
     serde_json::from_str(&text).ok()
 }
 
 /// Run one job now (used by --once and by the loop when due), then
 /// retention-prune and persist the state file.
-fn execute(j: &Job) -> State {
+pub(crate) fn execute(j: &Job) -> State {
     let started = mdrv_db::now_ms();
     let (result, detail, lsn, backup) = run_job(j);
     let mut detail = detail;
@@ -280,7 +285,14 @@ fn validate(js: &[Job]) -> Result<(), String> {
     Ok(())
 }
 
-pub fn run(slug: Option<&str>, once: bool, interval_secs: u64) -> ExitCode {
+pub fn run(
+    slug: Option<&str>,
+    once: bool,
+    interval_secs: u64,
+    bind: Option<String>,
+    port: Option<u16>,
+    console: Option<PathBuf>,
+) -> ExitCode {
     let (cfg_path, cfg) = match load_fleet() {
         Ok(x) => x,
         Err(e) => {
@@ -320,37 +332,26 @@ pub fn run(slug: Option<&str>, once: bool, interval_secs: u64) -> ExitCode {
             ExitCode::SUCCESS
         };
     }
-    println!(
-        "mdrv-db daemon: {} job(s) from {} (ctrl-c stops; skipped = owner running)",
-        sched.len(),
-        cfg_path.display()
-    );
-    for j in &sched {
-        let c = j.cron.clone().unwrap_or_default();
-        let next = next_after(&c, Local::now()).map(ts).unwrap_or_else(|e| e);
-        println!(
-            "  {:<18} cron='{c}' retention={}d next={next}",
-            j.slug,
-            j.retention_days.unwrap_or(0)
-        );
-    }
-    let interval = interval_secs.max(1);
-    loop {
-        let now = mdrv_db::now_ms();
-        for j in &sched {
-            let due = load_state(j).map(|s| now >= s.next_run_ms).unwrap_or(false);
-            if due {
-                let st = execute(j);
-                println!(
-                    "{} [{}] {} {}",
-                    ts(st.last_run_ms),
-                    st.slug,
-                    st.last_result,
-                    st.detail
-                );
-            }
+    // Server mode: scheduler loop + admin REST + SSE + console.
+    let data_root = cfg
+        .get("sched")
+        .and_then(|s| s.get("data_root"))
+        .and_then(|v| v.as_str())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/x/db"));
+    match server::serve(server::Opts {
+        bind,
+        port,
+        console,
+        interval_secs,
+        jobs: sched.into_iter().cloned().collect(),
+        data_root,
+    }) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("{e}");
+            ExitCode::from(1)
         }
-        std::thread::sleep(std::time::Duration::from_secs(interval));
     }
 }
 

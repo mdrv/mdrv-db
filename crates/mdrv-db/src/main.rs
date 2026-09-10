@@ -8,6 +8,7 @@ mod daemon;
 mod dump;
 mod port_turso;
 mod selftest;
+mod server;
 
 use clap::{CommandFactory, Parser, Subcommand, ValueHint};
 use std::path::PathBuf;
@@ -256,6 +257,15 @@ enum DaemonCmd {
         /// Poll interval in seconds
         #[arg(long, default_value_t = 15)]
         interval_secs: u64,
+        /// REST bind address (default: [daemon].host or 127.0.0.1)
+        #[arg(long)]
+        bind: Option<String>,
+        /// REST port (default: [daemon].port or 8300)
+        #[arg(long)]
+        port: Option<u16>,
+        /// Serve the console from this directory instead of the embedded build
+        #[arg(long, value_hint = ValueHint::DirPath)]
+        console: Option<PathBuf>,
     },
     /// Show per-slug daemon state (last run, next run, result, backups)
     Status {
@@ -492,7 +502,10 @@ fn main() -> ExitCode {
                 slug,
                 once,
                 interval_secs,
-            } => daemon::run(slug.as_deref(), once, interval_secs),
+                bind,
+                port,
+                console,
+            } => daemon::run(slug.as_deref(), once, interval_secs, bind, port, console),
             DaemonCmd::Status { slug } => daemon::status(slug.as_deref()),
             DaemonCmd::Install => daemon::install(),
         },
