@@ -203,7 +203,7 @@ enum Cmd {
         /// Validate entries (exit 1 on problems)
         #[arg(long)]
         check: bool,
-        /// Set one property: --set 'db.app.data_dir=/x/db/app.example.id'
+        /// Set one property: --set 'db.myapp.data_dir=/x/db/myapp'
         #[arg(long)]
         set: Option<String>,
     },
@@ -261,7 +261,7 @@ enum BlobOp {
 
 fn not_yet(what: &str) -> ExitCode {
     eprintln!("{what} is planned for a later v2 phase.");
-    eprintln!("Meanwhile, v1 tooling: /g/mdrv-db-v1-archive (packages/db-maintenance, admin RPC).");
+    eprintln!("Meanwhile, v1 tooling (maintenance daemon, admin RPC) lives in the private v1 archive.");
     ExitCode::from(1)
 }
 

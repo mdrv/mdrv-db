@@ -35,7 +35,7 @@ fn load(file: &Path) -> Result<toml::Value, String> {
 }
 
 /// Find the engine name (fleet slug) whose data_dir matches, e.g.
-/// [db.mid] data_dir = /x/db/main.example.id -> "mid". Comparison is
+/// [db.myapp] data_dir = /x/db/myapp -> "myapp". Comparison is
 /// canonicalized when possible, string-based otherwise.
 pub fn lookup_name(file: &Path, data_dir: &Path) -> Option<String> {
     let cfg = load(file).ok()?;
@@ -158,7 +158,7 @@ fn fmt_cadence(v: Option<&toml::Value>) -> String {
     }
 }
 
-/// `mdrv-db config --set db.app.data_dir=/x/db/app.example.id`
+/// `mdrv-db config --set db.myapp.data_dir=/x/db/myapp`
 /// Writes the TOML back preserving comments where possible (single-key edit).
 fn set_prop(path: &Path, expr: &str) -> ExitCode {
     let (key, val) = match expr.split_once('=') {

@@ -6,6 +6,7 @@ members = ["crates/mdrv-db", "crates/mdrv-db-napi"]
 edition = "2021"
 version = "0.2.0"
 license = "MIT"
+repository = "https://github.com/mdrv/mdrv-db"
 
 [workspace.dependencies]
 fjall = "3.1"

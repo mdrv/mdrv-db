@@ -9,7 +9,7 @@ first-class, all inspectable offline.
 
 > This is the **v2** line (CLI-first). The crash-proven v1 engine lives on in `crates/mdrv-db/src`
 > (carried over verbatim); the v1 archive — including the napi binding and the app integrations —
-> is at `/g/mdrv-db-v1-archive`.
+> is at a local v1 archive (not published).
 
 ## Status (v2)
 
@@ -111,6 +111,6 @@ mdrv-db restore /tmp/mig --data-dir /x/db/<slug>      # writes the NEW live/ lay
   verification; relays admin RPC to up owners, offline-copies down ones).
 - **P3** — website (Svelte 5 + vanilla-extract + LogTape): fleet dashboard, log viewer,
   backup browser, restore wizard. Read-mostly by design.
-- **P4** — napi binding v2 (`@mdrv/db`), migrate consumers (mid, app) via backup→restore.
+- **P4** — napi binding v2 (`@mdrv/db`), migrate consumers (consumer apps) via backup→restore.
 
-See `PLAN.md` for decisions (D1–D6) and the full phase plan. Guides: `/guides/mdrv-db/`.
+See `PLAN.md` for decisions (D1–D6) and the full phase plan. 
