@@ -25,3 +25,9 @@ package() {
   install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }
+
+post_install() {
+  echo "==> carapace-bin loads user specs ONLY from ~/.config/carapace/specs"
+  echo "==> (the /usr/share copy is not read as of carapace-bin 1.7.3)."
+  echo "==> Enable completions:  mdrv-db carapace install"
+}

@@ -130,5 +130,14 @@ DU2=$(du -sk "$BLOBS" | cut -f1)
 [ -z "$(ls -A "$BLOBS/.staging" 2>/dev/null)" ] && ok "staging empty after finish" || bad "staging has leftovers"
 
 echo
+# --- carapace install (user spec dir; system-wide is ignored by carapace-bin) ---
+export XDG_CONFIG_HOME="$T/xdgconf"
+if OUT=$($BIN carapace install 2>&1) && [ -s "$T/xdgconf/carapace/specs/mdrv-db.yaml" ]; then
+  ok "carapace install writes user spec"
+else
+  bad "carapace install writes user spec ($OUT)"
+fi
+unset XDG_CONFIG_HOME
+
 echo "cli-test: $PASS passed, $FAIL failed"
 [ $FAIL -eq 0 ]

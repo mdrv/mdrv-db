@@ -231,9 +231,22 @@ enum Cmd {
         abort_after: u64,
         progress: PathBuf,
     },
-    /// Emit a carapace completion spec:
-    /// mdrv-db completion > ~/.config/carapace/specs/mdrv-db.yaml
+    /// Emit a carapace completion spec to stdout:
+    /// mdrv-db completion > myspec.yaml
     Completion,
+    /// Install the carapace spec into the user config dir
+    /// ($XDG_CONFIG_HOME or ~/.config)/carapace/specs/ — the only
+    /// location carapace-bin loads user specs from.
+    Carapace {
+        #[command(subcommand)]
+        cmd: CarapaceCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum CarapaceCmd {
+    /// Write the spec to <user config>/carapace/specs/mdrv-db.yaml
+    Install,
 }
 
 #[derive(Subcommand)]
@@ -259,6 +272,26 @@ enum BlobOp {
     },
 }
 
+/// Write the generated spec into the user's carapace specs dir — the only
+/// location carapace-bin loads user specs from (UserConfigDir).
+fn carapace_install() -> Result<std::path::PathBuf, String> {
+    let mut buf = Vec::new();
+    let mut cmd = Cli::command();
+    clap_complete::generate(carapace_spec_clap::Spec, &mut cmd, "mdrv-db", &mut buf);
+    let config_dir = match std::env::var("XDG_CONFIG_HOME") {
+        Ok(v) if !v.is_empty() => std::path::PathBuf::from(v),
+        _ => std::path::PathBuf::from(
+            std::env::var("HOME").map_err(|_| "cannot resolve config dir: no XDG_CONFIG_HOME or HOME")?,
+        )
+        .join(".config"),
+    };
+    let dir = config_dir.join("carapace").join("specs");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create {dir:?}: {e}"))?;
+    let path = dir.join("mdrv-db.yaml");
+    std::fs::write(&path, buf).map_err(|e| format!("cannot write {path:?}: {e}"))?;
+    Ok(path)
+}
+
 fn not_yet(what: &str) -> ExitCode {
     eprintln!("{what} is planned for a later v2 phase.");
     eprintln!("Meanwhile, v1 tooling (maintenance daemon, admin RPC) lives in the private v1 archive.");
@@ -279,6 +312,20 @@ fn main() -> ExitCode {
             );
             ExitCode::SUCCESS
         }
+        Cmd::Carapace { cmd: CarapaceCmd::Install } => match carapace_install() {
+            Ok(path) => {
+                println!("spec installed: {}", path.display());
+                println!("carapace-bin loads user specs ONLY from this dir");
+                println!("(system-wide /usr/share/carapace/specs is ignored as of 1.7.3).");
+                println!("Completions also need the carapace shell hook (carapace <shell> init in");
+                println!("your shell rc). Test: carapace mdrv-db nushell mdrv-db ''");
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("carapace install failed: {e}");
+                ExitCode::from(1)
+            }
+        },
         Cmd::Init { data_dir } => {
             let live = data_dir.join("live");
             let recovery = data_dir.join("recovery");
