@@ -11,11 +11,11 @@ import { blake3Hex } from './index.js'
  * Mount it on your Bun.serve fetch (mdrv mode only):
  *
  *   import { createMdrvDbAdmin } from '@mdrv/db/admin'
- *   const admin = createMdrvDbAdmin(engine, { token: process.env.MDRV_ADMIN_TOKEN! })
+ *   const admin = createMdrvDbAdmin(engine, { token: process.env.MDRV_DB_ADMIN_TOKEN! })
  *   // in fetch: if (url.pathname === '/mdrv/rpc') return admin(req)
  *
  * Security: the token holder may trigger backups to ANY directory and prune
- * the WAL — treat MDRV_ADMIN_TOKEN like a database password. Bind the owner
+ * the WAL — treat MDRV_DB_ADMIN_TOKEN like a database password. Bind the owner
  * to localhost when the RPC is enabled.
  */
 
