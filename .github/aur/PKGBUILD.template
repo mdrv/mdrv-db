@@ -6,10 +6,11 @@ pkgdesc="Fjall durability envelope around a SQL data port and content-addressed 
 arch=('x86_64' 'aarch64')
 url="https://crates.io/crates/mdrv-db"
 license=('MIT')
+depends=('libgcc')
 makedepends=('cargo')
-options=('!debug')
 source=("mdrv-db-$pkgver.crate::https://static.crates.io/crates/mdrv-db/mdrv-db-$pkgver.crate")
 sha256sums=('@CK@')
+options=('!debug' '!lto')
 
 build() {
   cd "mdrv-db-$pkgver"
