@@ -39,6 +39,7 @@ jobs:
           grep -q "\"version\": \"$V\"" packages/db/package.json
           grep -q "\"version\": \"$V\"" packages/db-config/package.json
           grep -q "\"version\": \"$V\"" packages/db-events/package.json
+      - uses: oven-sh/setup-bun@v2
       - name: Build console (embedded via include_dir)
         run: |
           cd packages/console
