@@ -29,8 +29,7 @@ use std::sync::{Arc, Mutex};
 use tokio_stream::wrappers::{BroadcastStream, IntervalStream};
 use tokio_stream::StreamExt;
 
-static CONSOLE: include_dir::Dir =
-    include_dir::include_dir!("$CARGO_MANIFEST_DIR/../../packages/console/dist");
+static CONSOLE: include_dir::Dir = include_dir::include_dir!("$CARGO_MANIFEST_DIR/console-dist");
 
 const COOKIE: &str = "mdrv_db_session";
 
