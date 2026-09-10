@@ -26,7 +26,7 @@ export interface ExecuteOutcome {
 	response?: string
 }
 
-export declare class Mdrv {
+export declare class MdrvDb {
 	/** Opens (or creates) the data dir; uses <dir>/live when it exists (v2 fleet layout). */
 	constructor(dataDir: string, name: string, fsyncEachWrite?: boolean)
 	execute(requestJson: string): Promise<string>

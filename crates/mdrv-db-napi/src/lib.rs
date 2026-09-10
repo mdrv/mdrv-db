@@ -164,12 +164,12 @@ pub fn blake3_hex(bytes: Uint8Array) -> String {
 }
 
 #[napi]
-pub struct Mdrv {
+pub struct MdrvDb {
     inner: std::sync::Arc<Inner>,
 }
 
 #[napi]
-impl Mdrv {
+impl MdrvDb {
     /// Open (or create) a data dir and run recovery-on-open. Uses the v2
     /// live/ layout when present (data dir = <root>/live), else flat.
     #[napi(constructor)]
@@ -184,7 +184,7 @@ impl Mdrv {
         };
         let engine = Engine::open(&live, &name, Box::new(port), cfg)
             .map_err(|e| Error::from_reason(e.to_string()))?;
-        Ok(Mdrv {
+        Ok(MdrvDb {
             inner: std::sync::Arc::new(Inner {
                 engine: std::sync::Mutex::new(Some(engine)),
                 uploads: std::sync::Mutex::new(HashMap::new()),

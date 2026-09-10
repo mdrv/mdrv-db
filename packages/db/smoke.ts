@@ -4,7 +4,7 @@
  * verify + backup + idempotency.
  */
 import { rmSync } from 'node:fs'
-import { blake3Hex, Mdrv } from './index.js'
+import { blake3Hex, MdrvDb } from './index.js'
 
 let checks = 0
 const ok = (name: string, cond: boolean) => {
@@ -20,7 +20,7 @@ const dir = `/tmp/mdrv-db-smoke-${Date.now()}`
 rmSync(dir, { recursive: true, force: true })
 
 // --- flat layout (no live/) -------------------------------------------------
-const db = new Mdrv(dir, 'smoke', true)
+const db = new MdrvDb(dir, 'smoke', true)
 ok(
 	'blake3Hex empty hash',
 	blake3Hex(new Uint8Array(0)) === 'af1349b9f5f9a1a6a0404dea36dcc9499b17cdd7b0a9b0a0e0b0d0e0f0a1b2c'.slice(0, 32)
@@ -123,7 +123,7 @@ await db.close()
 const dir2 = `${dir}-live`
 rmSync(dir2, { recursive: true, force: true })
 await Bun.write(`${dir2}/live/.keep`, '')
-const db2 = new Mdrv(dir2, 'smoke-live', true)
+const db2 = new MdrvDb(dir2, 'smoke-live', true)
 await db2.bootstrap(JSON.stringify(['CREATE TABLE IF NOT EXISTS t (id INTEGER PRIMARY KEY)']))
 ok('live/ layout db file', (await Bun.file(`${dir2}/live/app.db`).exists()) === true)
 await db2.close()

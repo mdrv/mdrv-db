@@ -24,6 +24,6 @@ if (!addon) {
 	throw new Error(`@mdrv/db: no native addon found for ${process.platform}-${process.arch}`)
 }
 
-export const Mdrv = addon.Mdrv
+export const MdrvDb = addon.MdrvDb
 export const blake3Hex = addon.blake3Hex
 export default addon
