@@ -1,0 +1,10 @@
+{
+	"name": "@mdrv/db-config",
+	"version": "0.2.0",
+	"description": "Typed config + event hooks for the mdrv-db suite",
+	"type": "module",
+	"main": "index.ts",
+	"dependencies": {
+		"smol-toml": "^1.3.1"
+	}
+}
