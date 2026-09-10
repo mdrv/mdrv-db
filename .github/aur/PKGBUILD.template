@@ -1,0 +1,26 @@
+# Maintainer: Umar Alfarouk <medrivia@gmail.com>
+pkgname=mdrv-db
+pkgver=@V@
+pkgrel=1
+pkgdesc="Fjall durability envelope around a SQL data port and content-addressed blob store (fleet CLI)"
+arch=('x86_64' 'aarch64')
+url="https://crates.io/crates/mdrv-db"
+license=('MIT')
+makedepends=('cargo')
+options=('!debug')
+source=("mdrv-db-$pkgver.crate::https://static.crates.io/crates/mdrv-db/mdrv-db-$pkgver.crate")
+sha256sums=('@CK@')
+
+build() {
+  cd "mdrv-db-$pkgver"
+  cargo build --release --locked
+}
+
+package() {
+  cd "mdrv-db-$pkgver"
+  install -Dm755 target/release/mdrv-db "$pkgdir/usr/bin/mdrv-db"
+  ./target/release/mdrv-db completion > mdrv-db.yaml
+  install -Dm644 mdrv-db.yaml "$pkgdir/usr/share/carapace/specs/mdrv-db.yaml"
+  install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

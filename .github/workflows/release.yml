@@ -93,7 +93,7 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   aur:
-    needs: release
+    needs: [release, crates]
     runs-on: ubuntu-latest
     container:
       image: archlinux:latest
@@ -116,40 +116,14 @@ jobs:
           su builder -c "GIT_SSH_COMMAND='ssh -i ~/.ssh/id_ed25519' \
             git clone ssh://aur@aur.archlinux.org/mdrv-db.git /home/builder/aur \
             || (git init /home/builder/aur && git -C /home/builder/aur remote add origin ssh://aur@aur.archlinux.org/mdrv-db.git)"
+      - uses: actions/checkout@v7
       - name: Write PKGBUILD + .SRCINFO
         run: |
           V="${{ needs.release.outputs.version }}"
           # official checksum from the crates.io API (source package, repo stays private)
-          CK=$(curl -fsSL "https://crates.io/api/v1/crates/mdrv-db/$V" | jq -r '.versions[0].checksum')
+          CK=$(curl -fsSL "https://crates.io/api/v1/crates/mdrv-db/$V" | jq -r --arg v "$V" '.versions[] | select(.num == $v) | .checksum')
           [ -n "$CK" ] && [ "$CK" != "null" ] || { echo "no checksum for mdrv-db $V"; exit 1; }
-          cat > /home/builder/aur/PKGBUILD << EOF
-          # Maintainer: Umar Alfarouk <medrivia@gmail.com>
-          pkgname=mdrv-db
-          pkgver=$V
-          pkgrel=1
-          pkgdesc="Fjall durability envelope around a SQL data port and content-addressed blob store (fleet CLI)"
-          arch=('x86_64' 'aarch64')
-          url="https://crates.io/crates/mdrv-db"
-          license=('MIT')
-          makedepends=('cargo')
-          options=('!debug')
-          source=("mdrv-db-\$pkgver.crate::https://static.crates.io/crates/mdrv-db/mdrv-db-\$pkgver.crate")
-          sha256sums=('$CK')
-
-          build() {
-            cd "mdrv-db-\$pkgver"
-            cargo build --release --locked
-          }
-
-          package() {
-            cd "mdrv-db-\$pkgver"
-            install -Dm755 target/release/mdrv-db "\$pkgdir/usr/bin/mdrv-db"
-            ./target/release/mdrv-db completion > mdrv-db.yaml
-            install -Dm644 mdrv-db.yaml "\$pkgdir/usr/share/carapace/specs/mdrv-db.yaml"
-            install -Dm644 README.md "\$pkgdir/usr/share/doc/\$pkgname/README.md"
-            install -Dm644 LICENSE "\$pkgdir/usr/share/licenses/\$pkgname/LICENSE"
-          }
-          EOF
+          sed -e "s/@V@/$V/g" -e "s/@CK@/$CK/g" .github/aur/PKGBUILD.template > /home/builder/aur/PKGBUILD
           chown -R builder:builder /home/builder/aur
           su builder -c "cd /home/builder/aur && makepkg --printsrcinfo > .SRCINFO"
       - name: Commit + push to AUR
