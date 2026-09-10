@@ -16,7 +16,7 @@ jobs:
           - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu }
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Check version sync (tag == crate == packages)
@@ -37,7 +37,7 @@ jobs:
           cp mdrv-db.yaml README.md pkg/$D/
           tar -czf $D.tar.gz -C pkg $D
           sha256sum $D.tar.gz
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist-${{ matrix.target }}
           path: mdrv-db-*.tar.gz
@@ -45,10 +45,14 @@ jobs:
   release:
     needs: build
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
     steps:
-      - uses: actions/download-artifact@v4
+      - id: v
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@v8
         with: { merge-multiple: true, path: dist }
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           files: dist/*
           generate_release_notes: true
@@ -57,7 +61,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo publish --locked -p mdrv-db
         env:
@@ -67,11 +71,11 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - uses: oven-sh/setup-bun@v2
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           registry-url: https://registry.npmjs.org
       - name: Build napi binding (linux-x64-gnu)
@@ -86,3 +90,70 @@ jobs:
         working-directory: packages/db-config
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  aur:
+    needs: release
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+    steps:
+      - name: Setup system (builder user for makepkg)
+        run: |
+          pacman -Sy --noconfirm pacman-contrib git openssh
+          useradd -m builder
+          echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+      - name: Setup SSH for AUR
+        run: |
+          mkdir -p /home/builder/.ssh
+          echo "${{ secrets.AUR_SSH_PRIVATE_KEY }}" > /home/builder/.ssh/id_ed25519
+          chmod 600 /home/builder/.ssh/id_ed25519
+          chown -R builder:builder /home/builder/.ssh
+          ssh-keyscan -H aur.archlinux.org >> /home/builder/.ssh/known_hosts 2>/dev/null || true
+      - name: Clone AUR package
+        run: |
+          chown -R builder:builder /home/builder
+          su builder -c "GIT_SSH_COMMAND='ssh -i ~/.ssh/id_ed25519' \
+            git clone ssh://aur@aur.archlinux.org/mdrv-db-bin.git /home/builder/aur"
+      - name: Write PKGBUILD + .SRCINFO
+        run: |
+          V="${{ needs.release.outputs.version }}"
+          BASE="https://github.com/mdrv/mdrv-db/releases/download/v$V"
+          X86=$(curl -fsSL "$BASE/mdrv-db-x86_64-unknown-linux-gnu.tar.gz" | sha256sum | cut -d' ' -f1)
+          ARM=$(curl -fsSL "$BASE/mdrv-db-aarch64-unknown-linux-gnu.tar.gz" | sha256sum | cut -d' ' -f1)
+          cat > /home/builder/aur/PKGBUILD << EOF
+          # Maintainer: Umar Alfarouk <medrivia@gmail.com>
+          _pkgname=mdrv-db
+          pkgname=mdrv-db-bin
+          pkgver=$V
+          pkgrel=1
+          pkgdesc="Fjall durability envelope around a SQL data port and content-addressed blob store (fleet CLI)"
+          arch=('x86_64' 'aarch64')
+          url="https://github.com/mdrv/mdrv-db"
+          license=('MIT')
+          provides=("mdrv-db=\$pkgver")
+          conflicts=('mdrv-db')
+          options=('!debug')
+          source_x86_64=("\$_pkgname-x86_64-\$pkgver.tar.gz::\$url/releases/download/v\$pkgver/mdrv-db-x86_64-unknown-linux-gnu.tar.gz")
+          source_aarch64=("\$_pkgname-aarch64-\$pkgver.tar.gz::\$url/releases/download/v\$pkgver/mdrv-db-aarch64-unknown-linux-gnu.tar.gz")
+          sha256sums_x86_64=('$X86')
+          sha256sums_aarch64=('$ARM')
+
+          package() {
+            cd "\$srcdir/$_pkgname-\$CARCH-unknown-linux-gnu"
+            install -Dm755 mdrv-db "\$pkgdir/usr/bin/mdrv-db"
+            install -Dm644 mdrv-db.yaml "\$pkgdir/usr/share/carapace/specs/mdrv-db.yaml"
+            install -Dm644 README.md "\$pkgdir/usr/share/doc/\$_pkgname/README.md"
+          }
+          EOF
+          chown -R builder:builder /home/builder/aur
+          su builder -c "cd /home/builder/aur && makepkg --printsrcinfo > .SRCINFO"
+      - name: Commit + push to AUR
+        run: |
+          V="${{ needs.release.outputs.version }}"
+          su builder -c "cd /home/builder/aur && \
+            git config user.name 'Umar Alfarouk' && \
+            git config user.email 'medrivia@gmail.com' && \
+            git add -A && \
+            GIT_SSH_COMMAND='ssh -i ~/.ssh/id_ed25519' \
+            git commit -m 'updpkg: v$V' && \
+            GIT_SSH_COMMAND='ssh -i ~/.ssh/id_ed25519' git push"
