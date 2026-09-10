@@ -146,7 +146,7 @@ fn judge(dir: &Path, progress: &Path) -> Result<(usize, i64), String> {
 /// Child process: writes WRITES acked entries, aborting per scenario.
 pub fn child(dir: &Path, fault: &str, fsync: bool, abort_after: u64, progress: &Path) -> ExitCode {
     if fault != "-" {
-        std::env::set_var("MDRV_FAULT", fault);
+        std::env::set_var("MDRV_DB_FAULT", fault);
     }
     let mut engine = match crate::port_turso::open_engine(dir, "selftest", fsync, true) {
         Ok(e) => e,

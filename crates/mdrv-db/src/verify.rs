@@ -3,10 +3,10 @@
 
 use crate::engine::Engine;
 use crate::entry::{TxEntry, MARK_ABORTED, MARK_COMMITTED, MARK_PENDING};
-use crate::MdrvError;
+use crate::MdrvDbError;
 use serde_json::json;
 
-pub fn run(engine: &Engine) -> Result<serde_json::Value, MdrvError> {
+pub fn run(engine: &Engine) -> Result<serde_json::Value, MdrvDbError> {
     let mut anomalies: Vec<String> = Vec::new();
     let mut wal_entries = 0u64;
     let mut checked = 0u64;
@@ -114,11 +114,11 @@ pub fn run(engine: &Engine) -> Result<serde_json::Value, MdrvError> {
 /// Verify a recovery backup directory (manifest.json + app.db + fjall/ +
 /// blobs/): re-hashes every manifest-listed file with blake3 and compares
 /// sizes. No engine, no lock — safe next to a running owner.
-pub fn run_backup(backup_dir: &std::path::Path) -> Result<serde_json::Value, MdrvError> {
+pub fn run_backup(backup_dir: &std::path::Path) -> Result<serde_json::Value, MdrvDbError> {
     let mf = backup_dir.join("manifest.json");
     let text = std::fs::read_to_string(&mf)?;
     let manifest: serde_json::Value = serde_json::from_str(&text)
-        .map_err(|e| MdrvError::Corrupt(format!("manifest.json: {e}")))?;
+        .map_err(|e| MdrvDbError::Corrupt(format!("manifest.json: {e}")))?;
     let mut anomalies: Vec<String> = Vec::new();
     let mut files = 0u64;
     let mut bytes_total = 0u64;
@@ -159,7 +159,7 @@ pub fn run_backup(backup_dir: &std::path::Path) -> Result<serde_json::Value, Mdr
 /// Pending entries at or below the port watermark rolled forward (crash
 /// between apply and mark) — they are fine; above it they are pending
 /// work that recovery skipped (also fine). Anything else is an anomaly.
-pub fn pending_state(engine: &Engine, lsn: u64) -> Result<&'static str, MdrvError> {
+pub fn pending_state(engine: &Engine, lsn: u64) -> Result<&'static str, MdrvDbError> {
     let m = engine.marks.get(lsn.to_be_bytes())?;
     let applied = engine.applied.load(std::sync::atomic::Ordering::SeqCst);
     Ok(match m.as_ref().and_then(|x| x.first()) {

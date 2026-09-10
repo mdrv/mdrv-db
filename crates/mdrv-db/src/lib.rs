@@ -16,7 +16,7 @@ pub mod port;
 pub mod verify;
 
 pub use blob::BlobStore;
-pub use engine::{Engine, EngineConfig, ExecuteOutcome, MdrvError, MutateRequest, RecoveryReport};
+pub use engine::{Engine, EngineConfig, ExecuteOutcome, MdrvDbError, MutateRequest, RecoveryReport};
 pub use entry::{Op, PortValue, SqlKind, TxEntry, ENTRY_SCHEMA};
 pub use port::{DataPort, Stmt};
 

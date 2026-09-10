@@ -4,7 +4,7 @@
 
 use crate::blob::{hex, BlobStore};
 use crate::engine::Engine;
-use crate::MdrvError;
+use crate::MdrvDbError;
 use fjall::PersistMode;
 use serde_json::json;
 use std::fs;
@@ -15,7 +15,7 @@ pub struct BackupOutcome {
     pub manifest: serde_json::Value,
 }
 
-pub fn run(engine: &Engine, dest: impl AsRef<Path>) -> Result<BackupOutcome, MdrvError> {
+pub fn run(engine: &Engine, dest: impl AsRef<Path>) -> Result<BackupOutcome, MdrvDbError> {
     let dest = dest.as_ref();
     fs::create_dir_all(dest)?;
 
@@ -28,7 +28,7 @@ pub fn run(engine: &Engine, dest: impl AsRef<Path>) -> Result<BackupOutcome, Mdr
     engine
         .port
         .exec(&format!("VACUUM INTO '{lit}'"))
-        .map_err(MdrvError::Port)?;
+        .map_err(MdrvDbError::Port)?;
 
     // 3. blob tree + fjall dir copies
     copy_dir(engine.root.join("blobs"), dest.join("blobs"))?;

@@ -124,7 +124,7 @@ fn restore_copy(backup_dir: &std::path::Path, data_dir: &std::path::Path) -> Res
     about = "mdrv-db fleet CLI — offline inspection and lifecycle ops for Fjall-enveloped databases"
 )]
 struct Cli {
-    /// Fleet config path (default: $MDRV_CONFIG or ~/.config/mdrv-db/config.toml)
+    /// Fleet config path (default: $MDRV_DB_CONFIG or ~/.config/mdrv-db/config.toml)
     #[arg(long, global = true, value_hint = ValueHint::FilePath)]
     config: Option<PathBuf>,
     #[command(subcommand)]
@@ -196,7 +196,7 @@ enum Cmd {
     },
     /// Start the fleet daemon (admin REST, scheduler, website) — later phase
     Serve,
-    /// Inspect the fleet config ($MDRV_CONFIG or ~/.config/mdrv-db/config.toml)
+    /// Inspect the fleet config ($MDRV_DB_CONFIG or ~/.config/mdrv-db/config.toml)
     Config {
         #[arg(long, value_hint = ValueHint::FilePath)]
         file: Option<PathBuf>,

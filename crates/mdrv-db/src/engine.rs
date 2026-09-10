@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
-pub enum MdrvError {
+pub enum MdrvDbError {
     #[error("fjall: {0}")]
     Fjall(#[from] fjall::Error),
     #[error("io: {0}")]
@@ -111,7 +111,7 @@ impl Engine {
         name: &str,
         port: Box<dyn DataPort>,
         cfg: EngineConfig,
-    ) -> Result<Engine, MdrvError> {
+    ) -> Result<Engine, MdrvDbError> {
         let root = root.as_ref().to_path_buf();
         std::fs::create_dir_all(&root)?;
         let fjall_dir = root.join("fjall");
@@ -131,7 +131,7 @@ impl Engine {
             Some(prev) => {
                 let s = String::from_utf8_lossy(&prev).into_owned();
                 if s != name {
-                    return Err(MdrvError::Usage(format!(
+                    return Err(MdrvDbError::Usage(format!(
                         "data dir belongs to {s:?}, refusing to open as {name:?}"
                     )));
                 }
@@ -146,9 +146,9 @@ impl Engine {
 
         // port housekeeping: fence table + watermark
         port.exec("CREATE TABLE IF NOT EXISTS _mdrv (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
-            .map_err(MdrvError::Port)?;
+            .map_err(MdrvDbError::Port)?;
         port.exec("INSERT OR IGNORE INTO _mdrv (key, value) VALUES ('applied_lsn', '0')")
-            .map_err(MdrvError::Port)?;
+            .map_err(MdrvDbError::Port)?;
         let applied = read_applied(port.as_ref())?;
 
         let blobs = BlobStore::open(root.join("blobs"))?;
@@ -184,9 +184,9 @@ impl Engine {
     // -- write path ----------------------------------------------------------
 
     /// WAL-first mutation: journal intent (+fsync) → apply (one tx) → mark.
-    pub fn execute(&self, req: MutateRequest) -> Result<ExecuteOutcome, MdrvError> {
+    pub fn execute(&self, req: MutateRequest) -> Result<ExecuteOutcome, MdrvDbError> {
         if req.ops.is_empty() {
-            return Err(MdrvError::Usage("empty ops".into()));
+            return Err(MdrvDbError::Usage("empty ops".into()));
         }
 
         // idempotency replay
@@ -213,7 +213,7 @@ impl Engine {
                 if !self.blobs.staging_path(hash_hex).is_file()
                     && !self.blobs.final_path(hash_hex).is_file()
                 {
-                    return Err(MdrvError::Usage(format!(
+                    return Err(MdrvDbError::Usage(format!(
                         "blob {hash_hex} was never staged"
                     )));
                 }
@@ -306,7 +306,7 @@ impl Engine {
         }
     }
 
-    fn apply(&self, entry: &TxEntry) -> Result<u64, MdrvError> {
+    fn apply(&self, entry: &TxEntry) -> Result<u64, MdrvDbError> {
         let mut stmts: Vec<Stmt> = Vec::with_capacity(entry.ops.len() + 1);
         for op in &entry.ops {
             match op {
@@ -333,12 +333,12 @@ impl Engine {
             sql: "UPDATE _mdrv SET value = ? WHERE key = 'applied_lsn'".into(),
             params: vec![PortValue::Text(entry.lsn.to_string())],
         });
-        let n = self.port.exec_tx(&stmts).map_err(MdrvError::Port)?;
+        let n = self.port.exec_tx(&stmts).map_err(MdrvDbError::Port)?;
         Ok(n)
     }
 
     /// Stage bytes for a future execute() carrying Op::BlobPut{hash}.
-    pub fn put_blob(&self, bytes: &[u8]) -> Result<(String, u64), MdrvError> {
+    pub fn put_blob(&self, bytes: &[u8]) -> Result<(String, u64), MdrvDbError> {
         let hash = BlobStore::hash(bytes);
         self.blobs.stage(&hash, bytes)?;
         Ok((hash, bytes.len() as u64))
@@ -349,7 +349,7 @@ impl Engine {
     /// The resulting blob is unreferenced until an `execute` carries its
     /// `BlobPut` op — unreferenced blobs are reported (not deleted) by
     /// verify, and removed with `BlobDrop`.
-    pub fn blob_upload_begin(&self) -> Result<BlobUpload, MdrvError> {
+    pub fn blob_upload_begin(&self) -> Result<BlobUpload, MdrvDbError> {
         let id = format!(
             "{}-{}",
             std::process::id(),
@@ -358,12 +358,12 @@ impl Engine {
                 .map(|d| d.subsec_nanos())
                 .unwrap_or(0)
         );
-        self.blobs.upload_begin(&id).map_err(MdrvError::from)
+        self.blobs.upload_begin(&id).map_err(MdrvDbError::from)
     }
 
     /// Finish a streaming upload: returns (hash_hex, bytes_written).
-    pub fn blob_upload_finish(&self, up: BlobUpload) -> Result<(String, u64), MdrvError> {
-        up.finish(&self.blobs).map_err(MdrvError::from)
+    pub fn blob_upload_finish(&self, up: BlobUpload) -> Result<(String, u64), MdrvDbError> {
+        up.finish(&self.blobs).map_err(MdrvDbError::from)
     }
 
     /// Final (committed) blob path by hash, if present.
@@ -413,7 +413,7 @@ impl Engine {
     }
 
     /// Read-only SELECT path. Rejects anything that is not a SELECT.
-    pub fn query(&self, sql: &str, params: Vec<PortValue>) -> Result<serde_json::Value, MdrvError> {
+    pub fn query(&self, sql: &str, params: Vec<PortValue>) -> Result<serde_json::Value, MdrvDbError> {
         let t = sql.trim_start();
         let head = t
             .as_bytes()
@@ -421,9 +421,9 @@ impl Engine {
             .map(|b| b.to_ascii_lowercase())
             .unwrap_or(0);
         if head != b's' || !t.to_ascii_lowercase().starts_with("select") || sql.contains(';') {
-            return Err(MdrvError::Usage("query() is SELECT-only".into()));
+            return Err(MdrvDbError::Usage("query() is SELECT-only".into()));
         }
-        let out = self.port.query(sql, &params).map_err(MdrvError::Port)?;
+        let out = self.port.query(sql, &params).map_err(MdrvDbError::Port)?;
         // Named-row objects: {col: value}. Zero rows => zero objects
         // (names are unknowable then; callers treat [] as "no rows").
         let rows: Vec<serde_json::Value> = out
@@ -443,16 +443,16 @@ impl Engine {
     }
 
     /// Trusted DDL/migrations (called by the owning app at boot, not replayed).
-    pub fn bootstrap(&self, statements: &[String]) -> Result<(), MdrvError> {
+    pub fn bootstrap(&self, statements: &[String]) -> Result<(), MdrvDbError> {
         for s in statements {
-            self.port.exec(s).map_err(MdrvError::Port)?;
+            self.port.exec(s).map_err(MdrvDbError::Port)?;
         }
         Ok(())
     }
 
     // -- recovery ------------------------------------------------------------
 
-    fn recover(&self) -> Result<RecoveryReport, MdrvError> {
+    fn recover(&self) -> Result<RecoveryReport, MdrvDbError> {
         let started = std::time::Instant::now();
         let applied_before = self.applied.load(Ordering::SeqCst);
         let from = applied_before.saturating_add(1);
@@ -473,7 +473,7 @@ impl Engine {
                 MARK_PENDING => pending += 1, // applied-or-not; port watermark decides
                 MARK_ABORTED => aborted += 1,
                 _ => {
-                    return Err(MdrvError::Corrupt(format!(
+                    return Err(MdrvDbError::Corrupt(format!(
                         "lsn {lsn}: unknown mark {status}"
                     )));
                 }
@@ -506,7 +506,7 @@ impl Engine {
         })
     }
 
-    fn apply_group(&self, group: &[TxEntry]) -> Result<(), MdrvError> {
+    fn apply_group(&self, group: &[TxEntry]) -> Result<(), MdrvDbError> {
         let mut stmts = Vec::new();
         for entry in group {
             for op in &entry.ops {
@@ -530,7 +530,7 @@ impl Engine {
             sql: "UPDATE _mdrv SET value = ? WHERE key = 'applied_lsn'".into(),
             params: vec![PortValue::Text(last_lsn.to_string())],
         });
-        self.port.exec_tx(&stmts).map_err(MdrvError::Port)?;
+        self.port.exec_tx(&stmts).map_err(MdrvDbError::Port)?;
         // re-promote any blobs the entries reference
         for entry in group {
             for op in &entry.ops {
@@ -546,7 +546,7 @@ impl Engine {
 
     /// Prune WAL+marks up to the applied watermark. Call only after a
     /// successful backup of turso+blobs (see backup::run).
-    pub fn checkpoint(&self, compact: bool) -> Result<u64, MdrvError> {
+    pub fn checkpoint(&self, compact: bool) -> Result<u64, MdrvDbError> {
         let applied = self.applied.load(Ordering::SeqCst);
         if applied == 0 {
             return Ok(0);
@@ -572,7 +572,7 @@ impl Engine {
         level: u8,
         event: &str,
         data: Option<serde_json::Value>,
-    ) -> Result<(), MdrvError> {
+    ) -> Result<(), MdrvDbError> {
         let e = ReportEntry {
             v: 1,
             ts_ms: now_ms(),
@@ -593,7 +593,7 @@ impl Engine {
         &self,
         since_ms: i64,
         limit: usize,
-    ) -> Result<Vec<serde_json::Value>, MdrvError> {
+    ) -> Result<Vec<serde_json::Value>, MdrvDbError> {
         let mut from = [0u8; 16];
         from[..8].copy_from_slice(&since_ms.to_be_bytes());
         let mut out = Vec::new();
@@ -625,12 +625,12 @@ impl Engine {
     }
 
     /// Public flush+fsync (close-equivalent; Drop also attempts this).
-    pub fn persist_sync_all(&self) -> Result<(), MdrvError> {
+    pub fn persist_sync_all(&self) -> Result<(), MdrvDbError> {
         self.db.persist(PersistMode::SyncAll)?;
         Ok(())
     }
 
-    pub fn close(&mut self) -> Result<(), MdrvError> {
+    pub fn close(&mut self) -> Result<(), MdrvDbError> {
         if self.open {
             self.db.persist(PersistMode::SyncAll)?;
             self.open = false;
@@ -662,14 +662,14 @@ fn op_to_stmt(
     values: &[PortValue],
     pk: &PortValue,
     lsn: u64,
-) -> Result<Stmt, MdrvError> {
-    let table = safe_ident(table).map_err(MdrvError::Usage)?;
-    let pk_col = safe_ident(pk_col).map_err(MdrvError::Usage)?;
+) -> Result<Stmt, MdrvDbError> {
+    let table = safe_ident(table).map_err(MdrvDbError::Usage)?;
+    let pk_col = safe_ident(pk_col).map_err(MdrvDbError::Usage)?;
     for c in columns {
-        safe_ident(c).map_err(MdrvError::Usage)?;
+        safe_ident(c).map_err(MdrvDbError::Usage)?;
     }
     if columns.len() != values.len() {
-        return Err(MdrvError::Usage("columns/values length mismatch".into()));
+        return Err(MdrvDbError::Usage("columns/values length mismatch".into()));
     }
     // resolve the Lsn placeholder to the entry's LSN (deterministic replay:
     // journaled value is the marker, resolution happens at stmt-build time)
@@ -701,7 +701,7 @@ fn op_to_stmt(
         }
         SqlKind::Update => {
             if columns.is_empty() {
-                return Err(MdrvError::Usage("Update with no columns".into()));
+                return Err(MdrvDbError::Usage("Update with no columns".into()));
             }
             let sets = columns
                 .iter()
@@ -721,14 +721,14 @@ fn op_to_stmt(
     Ok(Stmt { sql, params })
 }
 
-fn read_applied(port: &dyn DataPort) -> Result<u64, MdrvError> {
+fn read_applied(port: &dyn DataPort) -> Result<u64, MdrvDbError> {
     let out = port
         .query("SELECT value FROM _mdrv WHERE key = 'applied_lsn'", &[])
-        .map_err(MdrvError::Port)?;
+        .map_err(MdrvDbError::Port)?;
     match out.rows.first().and_then(|r| r.first()) {
         Some(PortValue::Text(s)) => s
             .parse()
-            .map_err(|_| MdrvError::Corrupt("bad applied_lsn".into())),
+            .map_err(|_| MdrvDbError::Corrupt("bad applied_lsn".into())),
         _ => Ok(0),
     }
 }

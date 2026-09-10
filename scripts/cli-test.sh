@@ -25,7 +25,7 @@ for sub in init info dump verify backup restore checkpoint prune config completi
 done
 
 # --- 2. config with temp config (never touches real one)
-export MDRV_CONFIG=$T/config.toml
+export MDRV_DB_CONFIG=$T/config.toml
 cat > "$T/config.toml" << 'EOF'
 [defaults]
 durability = "per-write"

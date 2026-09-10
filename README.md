@@ -69,7 +69,7 @@ enforces this loudly, never silently). Exit code `2` from `dump` = decode warnin
 
 ## Fleet config
 
-`~/.config/mdrv-db/config.toml` (override with `$MDRV_CONFIG`):
+`~/.config/mdrv-db/config.toml` (override with `$MDRV_DB_CONFIG`):
 
 ```toml
 [defaults]

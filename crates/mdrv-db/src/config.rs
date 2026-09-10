@@ -1,7 +1,7 @@
 //! Fleet config inspection (`mdrv-db config`).
 //!
 //! Reads the same TOML registry the daemon and TS packages use
-//! (`$MDRV_CONFIG` or ~/.config/mdrv-db/config.toml) and renders or
+//! (`$MDRV_DB_CONFIG` or ~/.config/mdrv-db/config.toml) and renders or
 //! checks it. The config is the single source of truth: every tunable
 //! (paths, cadences, retention, RPC endpoints, token env names,
 //! per-DB settings) is a property here.
@@ -11,7 +11,7 @@ use std::process::ExitCode;
 
 static OVERRIDE: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
 
-/// `--config <path>` global flag; takes precedence over $MDRV_CONFIG.
+/// `--config <path>` global flag; takes precedence over $MDRV_DB_CONFIG.
 pub fn set_override(p: Option<PathBuf>) {
     let _ = OVERRIDE.set(p);
 }
@@ -20,7 +20,7 @@ pub fn default_path() -> Option<PathBuf> {
     if let Some(p) = OVERRIDE.get().and_then(|o| o.as_ref()) {
         return Some(p.clone());
     }
-    if let Ok(p) = std::env::var("MDRV_CONFIG") {
+    if let Ok(p) = std::env::var("MDRV_DB_CONFIG") {
         return Some(PathBuf::from(p));
     }
     std::env::var("HOME")
@@ -61,7 +61,7 @@ pub fn lookup_name(file: &Path, data_dir: &Path) -> Option<String> {
 pub fn run(file: Option<PathBuf>, check: bool, set: Option<String>) -> ExitCode {
     let path = file.or_else(default_path);
     let Some(path) = path else {
-        eprintln!("no config path (set $MDRV_CONFIG or $HOME)");
+        eprintln!("no config path (set $MDRV_DB_CONFIG or $HOME)");
         return ExitCode::from(1);
     };
     if let Some(expr) = set {
