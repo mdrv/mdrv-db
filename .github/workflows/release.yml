@@ -68,21 +68,39 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
-  npm:
+  npm-build:
     needs: build
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - { os: ubuntu-latest, suffix: linux-x64-gnu }
+          - { os: ubuntu-24.04-arm, suffix: linux-arm64-gnu }
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - uses: oven-sh/setup-bun@v2
+      - name: Build napi binding (${{ matrix.suffix }})
+        run: |
+          cargo build --release --locked -p mdrv-db-napi
+          cp target/release/libmdrv_db_napi.so packages/db/mdrv-db.${{ matrix.suffix }}.node
+      - uses: actions/upload-artifact@v7
+        with:
+          name: napi-${{ matrix.suffix }}
+          path: packages/db/*.node
+
+  npm-publish:
+    needs: npm-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
           registry-url: https://registry.npmjs.org
-      - name: Build napi binding (linux-x64-gnu)
-        run: |
-          cargo build --release --locked -p mdrv-db-napi
-          cp target/release/libmdrv_db_napi.so packages/db/mdrv-db.linux-x64-gnu.node
+      - uses: actions/download-artifact@v8
+        with:
+          merge-multiple: true
+          path: packages/db
       - run: npm publish --access public
         working-directory: packages/db
         env:
@@ -100,7 +118,7 @@ jobs:
     steps:
       - name: Setup system (builder user for makepkg)
         run: |
-          pacman -Sy --noconfirm pacman-contrib git openssh jq
+          pacman -Sy --noconfirm pacman-contrib git openssh
           useradd -m builder
           echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
       - name: Setup SSH for AUR
@@ -120,9 +138,11 @@ jobs:
       - name: Write PKGBUILD + .SRCINFO
         run: |
           V="${{ needs.release.outputs.version }}"
-          # official checksum from the crates.io API (source package, repo stays private)
-          CK=$(curl -fsSL "https://crates.io/api/v1/crates/mdrv-db/$V" | jq -r --arg v "$V" '.versions[] | select(.num == $v) | .checksum')
-          [ -n "$CK" ] && [ "$CK" != "null" ] || { echo "no checksum for mdrv-db $V"; exit 1; }
+          # checksum the published crate itself (static.crates.io needs no
+          # User-Agent; the API one 403s curl and gets rate-limited)
+          curl -fsSL "https://static.crates.io/crates/mdrv-db/mdrv-db-$V.crate" -o /tmp/mdrv-db.crate
+          CK=$(sha256sum /tmp/mdrv-db.crate | cut -d' ' -f1)
+          [ -n "$CK" ] || { echo "could not download mdrv-db $V crate"; exit 1; }
           sed -e "s/@V@/$V/g" -e "s/@CK@/$CK/g" .github/aur/PKGBUILD.template > /home/builder/aur/PKGBUILD
           chown -R builder:builder /home/builder/aur
           su builder -c "cd /home/builder/aur && makepkg --printsrcinfo > .SRCINFO"
