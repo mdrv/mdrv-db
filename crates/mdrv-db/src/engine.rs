@@ -372,6 +372,22 @@ impl Engine {
         p.is_file().then_some(p)
     }
 
+    /// Dumb delete of a blob: remove the committed file (and any staged
+    /// copy). Sidecar method — no journal entry, no tombstone; journaled
+    /// removal is `Op::BlobDrop` via execute(). Returns true when a blob
+    /// existed (committed or staged), false when absent.
+    pub fn delete_blob(&self, hash_hex: &str) -> Result<bool, MdrvDbError> {
+        if !BlobStore::valid_hash(hash_hex) {
+            return Err(MdrvDbError::Usage(format!(
+                "invalid blob hash {hash_hex:?}"
+            )));
+        }
+        let existed = self.blobs.final_path(hash_hex).is_file()
+            || self.blobs.staging_path(hash_hex).is_file();
+        self.blobs.drop_blob(hash_hex)?;
+        Ok(existed)
+    }
+
     /// Bounded TTL sweep of the idempotency cache. Samples one 1/256 slice
     /// of the keyspace (random-ish prefix from time^lsn) so cost is O(budget)
     /// regardless of cache size; weak deletes — consumed-once records.

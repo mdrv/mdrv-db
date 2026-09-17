@@ -346,6 +346,22 @@ impl MdrvDb {
         })
     }
 
+    /// Dumb delete of a blob (committed file + any staged copy). Returns
+    /// true when a blob existed. No journal entry — journaled removal is
+    /// Op.BlobDrop via execute().
+    #[napi]
+    pub async fn delete_blob(&self, hash_hex: String) -> Result<bool> {
+        let inner = self.inner.clone();
+        tokio::task::spawn_blocking(move || {
+            inner.with(|e| {
+                e.delete_blob(&hash_hex)
+                    .map_err(|e| Error::from_reason(e.to_string()))
+            })
+        })
+        .await
+        .map_err(|e| Error::from_reason(format!("join error: {e}")))?
+    }
+
     /// Append to the verbose ops log (Fifo keyspace, ages out).
     #[napi]
     pub fn report(&self, level: u8, event: String, data_json: Option<String>) -> Result<()> {

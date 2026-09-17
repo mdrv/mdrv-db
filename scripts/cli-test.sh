@@ -221,6 +221,13 @@ DU2=$(du -sk "$BLOBS" | cut -f1)
 [ "$DU1" = "$DU2" ] && ok "dedup: no double storage" || bad "dedup failed ($DU1 -> $DU2 KiB)"
 # leftover staging swept?
 [ -z "$(ls -A "$BLOBS/.staging" 2>/dev/null)" ] && ok "staging empty after finish" || bad "staging has leftovers"
+# blob delete (offline; owner stopped): existing blob, then absent + invalid hashes
+OUT=$($BIN blob delete "$DB" "$WANT" 2>&1); check "blob delete" 0 $?
+expect_contains "blob delete names hash" "$OUT" "deleted $WANT"
+[ ! -e "$BLOBS/${WANT:0:2}/$WANT" ] && ok "blob file removed" || bad "blob file still present"
+$BIN blob get "$DB" "$WANT" >/dev/null 2>&1; check "blob get after delete fails" 1 $?
+$BIN blob delete "$DB" "$WANT" >/dev/null 2>&1; check "blob delete absent fails" 1 $?
+$BIN blob delete "$DB" "NOTAHASH" >/dev/null 2>&1; check "blob delete invalid hash fails" 1 $?
 
 echo
 # --- carapace install (user spec dir; system-wide is ignored by carapace-bin) ---

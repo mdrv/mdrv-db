@@ -311,6 +311,14 @@ enum BlobOp {
         #[arg(long)]
         name: Option<String>,
     },
+    /// Remove a blob from the store (offline; owner must be stopped)
+    Delete {
+        #[arg(value_hint = ValueHint::DirPath)]
+        data_dir: PathBuf,
+        hash: String,
+        #[arg(long)]
+        name: Option<String>,
+    },
 }
 
 /// Write the generated spec into the user's carapace specs dir — the only
@@ -539,6 +547,17 @@ fn main() -> ExitCode {
                 Some(p) => Ok(p.display().to_string()),
                 None => Err(format!("no blob {hash}")),
             }),
+            BlobOp::Delete {
+                data_dir,
+                hash,
+                name,
+            } => engine_op(&data_dir, &name, |e| {
+                if e.delete_blob(&hash).map_err(|x| x.to_string())? {
+                    Ok(format!("deleted {hash}"))
+                } else {
+                    Err(format!("no blob {hash}"))
+                }
+            }),
         },
         Cmd::Selftest { root } => selftest::run(&root),
         Cmd::SelftestChild {
@@ -550,5 +569,35 @@ fn main() -> ExitCode {
         } => selftest::child(&dir, &fault, fsync == "1", abort_after, &progress),
         Cmd::Serve => not_yet("serve"),
         Cmd::Config { file, check, set } => config::run(file, check, set),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::port_turso;
+    use mdrv_db::MdrvDbError;
+
+    #[test]
+    fn blob_delete_roundtrip() {
+        let dir = std::env::temp_dir().join(format!("mdrv-db-delete-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut e = port_turso::open_engine(&dir, "blobtest", true, true).expect("open engine");
+        let (hash, size) = e.put_blob(b"delete-me").expect("put staged");
+        assert_eq!(size, 9);
+        assert!(e.delete_blob(&hash).expect("delete staged blob"));
+        assert!(e.blob_path(&hash).is_none());
+        assert!(!e.delete_blob(&hash).expect("delete absent blob"));
+        let (hash2, _) = e.put_blob(b"committed").expect("put committed");
+        e.blobs.promote(&hash2).expect("promote");
+        assert!(e.blob_path(&hash2).is_some());
+        assert!(e.delete_blob(&hash2).expect("delete committed blob"));
+        assert!(e.blob_path(&hash2).is_none());
+        assert!(matches!(e.delete_blob("zz"), Err(MdrvDbError::Usage(_))));
+        assert!(matches!(
+            e.delete_blob(&hash.to_uppercase()),
+            Err(MdrvDbError::Usage(_))
+        ));
+        e.close().ok();
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

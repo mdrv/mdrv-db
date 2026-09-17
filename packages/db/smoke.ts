@@ -108,6 +108,14 @@ const e2 = JSON.parse(
 ) as { lsn: number }
 ok('BlobPut op journaled', e2.lsn > out.lsn)
 
+// deleteBlob: dumb sidecar delete of a standalone (unreferenced) blob
+const delUp = db.blobPutBegin()
+db.blobPutChunk(delUp, chunk.subarray(0, 512 * 1024))
+const delBlob = JSON.parse(await db.blobPutFinish(delUp)) as { hash: string; size: number }
+ok('deleteBlob returns true', (await db.deleteBlob(delBlob.hash)) === true)
+ok('getBlobPath after delete is null', db.getBlobPath(delBlob.hash) === null)
+ok('deleteBlob absent returns false', (await db.deleteBlob(delBlob.hash)) === false)
+
 // verify + backup + checkpoint
 const v = JSON.parse(await db.verify()) as { ok: boolean; anomalies: string[] }
 ok('verify ok', v.ok === true && v.anomalies.length === 0)

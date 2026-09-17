@@ -23,6 +23,16 @@ impl BlobStore {
         hex(&d)
     }
 
+    /// Strict hash form: 64 lowercase hex chars (sha256 hex, as produced
+    /// by [`BlobStore::hash`]). Guards filesystem paths in delete paths.
+    pub fn valid_hash(hash_hex: &str) -> bool {
+        hash_hex.len() == 64
+            && hash_hex
+                .as_bytes()
+                .iter()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(b))
+    }
+
     pub fn final_path(&self, hash_hex: &str) -> PathBuf {
         self.root.join(&hash_hex[..2]).join(hash_hex)
     }

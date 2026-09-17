@@ -40,6 +40,8 @@ export declare class MdrvDb {
 	blobPutFinish(id: string): Promise<string>
 	blobPutAbort(id: string): void
 	getBlobPath(hashHex: string): string | null
+	/** Dumb delete of a blob (committed + staged). True when it existed. */
+	deleteBlob(hashHex: string): Promise<boolean>
 	report(level: number, event: string, dataJson?: string): void
 	reportExport(sinceMs: number, limit?: number): Promise<string>
 	backup(destDir: string): Promise<string>
