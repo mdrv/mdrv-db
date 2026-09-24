@@ -13,6 +13,8 @@ pub mod engine;
 pub mod entry;
 pub mod fault;
 pub mod port;
+#[cfg(feature = "turso")]
+pub mod port_turso;
 pub mod verify;
 
 pub use blob::BlobStore;
@@ -21,6 +23,8 @@ pub use engine::{
 };
 pub use entry::{Op, PortValue, SqlKind, TxEntry, ENTRY_SCHEMA};
 pub use port::{DataPort, Stmt};
+#[cfg(feature = "turso")]
+pub use port_turso::TursoPort;
 
 pub fn now_ms() -> i64 {
     std::time::SystemTime::now()

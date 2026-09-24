@@ -331,7 +331,7 @@ async fn report(
     let name = j.name.clone();
     let opened = tokio::task::spawn_blocking(move || {
         let n = crate::resolve_name(&dir, &name);
-        crate::port_turso::open_engine(&dir, &n, false, false).map(|mut e| {
+        crate::engine_open::open_engine(&dir, &n, false, false).map(|mut e| {
             let out = e.report_export(0, limit);
             let _ = e.close();
             out

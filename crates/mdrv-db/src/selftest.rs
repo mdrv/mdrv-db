@@ -100,7 +100,7 @@ fn judge(dir: &Path, progress: &Path) -> Result<(usize, i64), String> {
         })
         .unwrap_or_default();
     let mut engine =
-        crate::port_turso::open_engine(dir, "selftest", true, false).map_err(|e| e.to_string())?;
+        crate::engine_open::open_engine(dir, "selftest", true, false).map_err(|e| e.to_string())?;
     // query() returns a JSON array of named-row objects: [{col: value}, ...]
     let rows = engine
         .query("SELECT COUNT(*) AS n FROM kv WHERE id < 1000000", vec![])
@@ -151,7 +151,7 @@ pub fn child(dir: &Path, fault: &str, fsync: bool, abort_after: u64, progress: &
     if fault != "-" {
         std::env::set_var("MDRV_DB_FAULT", fault);
     }
-    let mut engine = match crate::port_turso::open_engine(dir, "selftest", fsync, true) {
+    let mut engine = match crate::engine_open::open_engine(dir, "selftest", fsync, true) {
         Ok(e) => e,
         Err(e) => {
             eprintln!("child open: {e}");

@@ -46,7 +46,8 @@ jobs:
           bun install --frozen-lockfile
           bun run build
       - name: Build CLI
-        run: cargo build --release --locked --target ${{ matrix.target }} -p mdrv-db
+        # the bin requires the lib's `turso` feature (TursoPort lives there)
+        run: cargo build --release --locked --target ${{ matrix.target }} -p mdrv-db --features turso
       - name: Smoke the binary
         run: target/${{ matrix.target }}/release/mdrv-db --version
       - name: Package

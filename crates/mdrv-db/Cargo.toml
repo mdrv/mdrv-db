@@ -16,10 +16,15 @@ path = "src/lib.rs"
 [[bin]]
 name = "mdrv-db"
 path = "src/main.rs"
+# the CLI needs the lib's TursoPort, so the whole bin target rides on the feature
+required-features = ["turso"]
+
+[features]
+turso = ["dep:turso", "dep:tokio"]
 
 [dependencies]
-turso = { workspace = true }
-tokio = { workspace = true }
+turso = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
 axum = { workspace = true }
 tokio-stream = { workspace = true }
 fs2 = { workspace = true }

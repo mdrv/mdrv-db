@@ -6,7 +6,7 @@
 mod config;
 mod daemon;
 mod dump;
-mod port_turso;
+mod engine_open;
 mod selftest;
 mod server;
 
@@ -39,7 +39,7 @@ fn resolve_name(data_dir: &std::path::Path, name: &Option<String>) -> String {
 /// Read the engine's recorded db_name straight from the fjall envelope
 /// (read-only, no port). Returns None when there is no envelope yet.
 fn read_meta_name(data_dir: &std::path::Path) -> Option<String> {
-    let root = port_turso::live_dir(data_dir);
+    let root = mdrv_db::live_dir(data_dir);
     let db = fjall::Database::builder(root.join("fjall")).open().ok()?;
     let meta = db
         .keyspace("meta", fjall::KeyspaceCreateOptions::default)
@@ -54,7 +54,7 @@ fn engine_op(
     f: impl FnOnce(&mut mdrv_db::Engine) -> Result<String, String>,
 ) -> ExitCode {
     let n = resolve_name(data_dir, name);
-    let mut engine = match port_turso::open_engine(data_dir, &n, true, false) {
+    let mut engine = match engine_open::open_engine(data_dir, &n, true, false) {
         Ok(e) => e,
         Err(e) => {
             eprintln!("{e}");
@@ -407,7 +407,7 @@ fn main() -> ExitCode {
                 }
             }
             let n = resolve_name(&data_dir, &None);
-            match port_turso::open_engine(&data_dir, &n, true, true) {
+            match engine_open::open_engine(&data_dir, &n, true, true) {
                 Ok(mut e) => {
                     let applied = e
                         .status()
@@ -574,14 +574,14 @@ fn main() -> ExitCode {
 
 #[cfg(test)]
 mod tests {
-    use super::port_turso;
+    use super::engine_open;
     use mdrv_db::MdrvDbError;
 
     #[test]
     fn blob_delete_roundtrip() {
         let dir = std::env::temp_dir().join(format!("mdrv-db-delete-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        let mut e = port_turso::open_engine(&dir, "blobtest", true, true).expect("open engine");
+        let mut e = engine_open::open_engine(&dir, "blobtest", true, true).expect("open engine");
         let (hash, size) = e.put_blob(b"delete-me").expect("put staged");
         assert_eq!(size, 9);
         assert!(e.delete_blob(&hash).expect("delete staged blob"));

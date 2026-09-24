@@ -1,15 +1,15 @@
-//! Synchronous Turso data port for CLI operations + engine-open helper.
+//! Synchronous Turso data port (optional `turso` feature).
 //!
-//! Ported from the v1 napi crate (same logic, no napi). Used by
-//! verify/backup/restore/checkpoint/prune, which all need the real data
-//! layer — so they REQUIRE the owning app to be stopped (fjall + turso
-//! file locks).
+//! Ported from the v1 napi crate (same logic, no napi). Gated behind the
+//! optional `turso` feature so embedders that bring their own
+//! [`DataPort`] never compile a SQL engine. Holding the port takes the
+//! turso file lock — the owning app must not have the DB open elsewhere.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Mutex;
 
-use mdrv_db::port::{DataPort, QueryOut, Stmt};
-use mdrv_db::{Engine, EngineConfig, PortValue};
+use crate::port::{DataPort, QueryOut, Stmt};
+use crate::PortValue;
 
 pub struct TursoPort {
     rt: tokio::runtime::Runtime,
@@ -130,34 +130,48 @@ impl DataPort for TursoPort {
     }
 }
 
-/// Resolve the live dir: `<dir>/live` when the fleet layout is used,
-/// otherwise the dir itself (flat layout, v1-compatible).
-pub fn live_dir(root: &Path) -> PathBuf {
-    mdrv_db::live_dir(root)
-}
+#[cfg(test)]
+mod tests {
+    use super::TursoPort;
+    use crate::port::DataPort as _;
+    use crate::{Engine, EngineConfig, MutateRequest, Op, PortValue, SqlKind};
 
-/// Open the engine for CLI ops. Fails with a hint when the fjall lock is
-/// held (owner running) or the dir is not an mdrv database.
-pub fn open_engine(
-    root: &Path,
-    name: &str,
-    fsync_each_write: bool,
-    allow_create: bool,
-) -> Result<Engine, String> {
-    let live = live_dir(root);
-    let fjall_dir = live.join("fjall");
-    if !fjall_dir.is_dir() {
-        if allow_create {
-            std::fs::create_dir_all(&fjall_dir)
-                .map_err(|e| format!("cannot create {fjall_dir:?}: {e}"))?;
-        } else {
-            return Err(format!(
-                "{:?} does not exist — not an mdrv database (or never initialized)",
-                fjall_dir
-            ));
-        }
+    #[test]
+    fn turso_port_roundtrip() {
+        let dir = std::env::temp_dir().join(format!("mdrv-db-turso-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let port = TursoPort::open(dir.join("app.db")).expect("open port");
+        let mut e = Engine::open(&dir, "upperadd-test", Box::new(port), EngineConfig::default())
+            .expect("open engine");
+        e.bootstrap(&["CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT NOT NULL)".into()])
+            .expect("bootstrap");
+        let out = e
+            .execute(MutateRequest {
+                actor: "test".into(),
+                ops: vec![Op::Sql {
+                    kind: SqlKind::Upsert,
+                    table: "t".into(),
+                    pk_col: "id".into(),
+                    columns: vec!["id".into(), "v".into()],
+                    values: vec![PortValue::Int(1), PortValue::Text("hello".into())],
+                    pk: PortValue::Int(1),
+                }],
+                idem_key: None,
+                response: None,
+            })
+            .expect("execute");
+        assert_eq!(out.lsn, 1);
+        // turso counts INSERT OR REPLACE as 2 (delete + insert)
+        assert!(out.rows_changed >= 1);
+        let rows = e
+            .query("SELECT v FROM t WHERE id = ?", vec![PortValue::Int(1)])
+            .expect("query");
+        assert_eq!(rows[0]["v"], serde_json::json!("hello"));
+        e.close().expect("close");
+        // reopen fresh: integrity_check lives on the port, not the engine
+        let p = TursoPort::open(dir.join("app.db")).expect("reopen port");
+        assert_eq!(p.integrity_check().expect("integrity_check"), "ok");
+        let _ = std::fs::remove_dir_all(&dir);
     }
-    let port = Box::new(TursoPort::open(live.join("app.db"))?);
-    Engine::open(&live, name, port, EngineConfig { fsync_each_write })
-        .map_err(|e| format!("engine open failed: {e} (owner running? wrong --name?)"))
 }
