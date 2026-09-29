@@ -55,7 +55,10 @@ battle-tested platform.
 ## Build
 
 ```bash
-cargo build --release            # add --offline if crate fetch times out (cache has everything)
+cargo build --release -p mdrv-db --features turso
+#                ^ the CLI bin requires the `turso` feature; without it only
+#                  the lib + napi cdylib are built
+# add --offline if crate fetch times out (cache has everything)
 ```
 
 Binary: `target/release/mdrv-db`.
@@ -71,14 +74,14 @@ mdrv-db completion install
 ```bash
 mdrv-db init ~/.local/share/mdrv-db/app.example.id            # create live/ + recovery/
 mdrv-db info ~/.local/share/mdrv-db/main.example.id                   # keyspace sizes, applied_lsn, blobs
-mdrv-db dump ~/.local/share/mdrv-db/main.example.id wal \
+mdrv-db dump wal ~/.local/share/mdrv-db/main.example.id \
     --since '2026-09-10 04:50' --filter 'register' --status committed --reverse
-mdrv-db dump ~/.local/share/mdrv-db/main.example.id report --level 3 --limit 50
+mdrv-db dump report ~/.local/share/mdrv-db/main.example.id --level 3 --limit 50
 mdrv-db config --check                           # fleet sanity (missing live/fjall etc.)
 mdrv-db config --set 'db.mid.durability="per-write"'
 mdrv-db verify ~/.local/share/mdrv-db/main.example.id                 # WAL hashes, blob re-hash, PRAGMA integrity
 mdrv-db backup ~/.local/share/mdrv-db/main.example.id                 # → recovery/<ts>-offline + manifest (blake3)
-mdrv-db restore ~/.local/share/mdrv-db/main.example.id/recovery/<ts>-offline --data-dir ~/.local/share/mdrv-db/main.example.id
+mdrv-db restore ~/.local/share/mdrv-db/main.example.id/recovery/<ts>-offline ~/.local/share/mdrv-db/main.example.id
 mdrv-db checkpoint ~/.local/share/mdrv-db/main.example.id --compact   # prune WAL ≤ applied_lsn (+ major compact)
 mdrv-db daemon run --once                            # run every scheduled job now, then exit
 mdrv-db daemon run                                   # scheduler + admin REST + console on 127.0.0.1:8300
@@ -93,7 +96,9 @@ enforces this loudly, never silently). Exit code `2` from `dump` = decode warnin
 
 ## Fleet config
 
-`~/.config/mdrv-db/config.toml` (override with `$MDRV_DB_CONFIG`):
+`mdrv-db/config.toml` (override with `$MDRV_DB_CONFIG`): `~/.config/` on
+Linux, `%APPDATA%\mdrv-db\config.toml` on Windows, `~/Library/Application
+Support/mdrv-db/config.toml` on macOS.
 
 ```toml
 [defaults]
@@ -104,8 +109,9 @@ verify = "weekly"
 data_root = "~/.local/share/mdrv-db"
 
 [db.mid]
-name = "Example App"
-owner = "alice"
+owner = "alice" # engine name is NOT set here: it lives in live/ meta (stamped
+# by `init`), and a mismatched `name =` field makes the daemon
+# skip the slug (name-guard refuses the open)
 data_dir = "~/.local/share/mdrv-db/main.example.id"
 rpc = "127.0.0.1:8100/mdrv/rpc" # admin RPC when the owner app is up
 token_env = "MID_ADMIN_TOKEN"
@@ -126,7 +132,7 @@ under `live/`. Migration is the backup→restore drill:
 
 ```bash
 mdrv-db backup /old/flat/dir --dest /tmp/mig          # v1 flat layout works (live_dir falls back)
-mdrv-db restore /tmp/mig --data-dir ~/.local/share/mdrv-db/<slug>      # writes the NEW live/ layout + verifies
+mdrv-db restore /tmp/mig ~/.local/share/mdrv-db/<slug>                 # writes the NEW live/ layout + verifies
 ```
 
 ## Roadmap

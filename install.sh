@@ -152,7 +152,7 @@ if curl -fsSL "$BASE_URL/SHA256SUMS.txt" -o "$TMP/SHA256SUMS.txt"; then
 	EXPECTED=$(grep -E "^[0-9a-f]{64}[[:space:]]+\*?$(printf '%s' "$ASSET" | sed 's/[][\.*^$/]/\\&/g')$" "$TMP/SHA256SUMS.txt" | head -n 1 | cut -d ' ' -f1)
 	if [ -n "$EXPECTED" ]; then
 		if [ -z "$sha_tool" ]; then
-			info "no sha256 tool found (sha256sum/shasum/openssl) — skipping checksum verification"
+			err "no sha256 tool found (sha256sum/shasum/openssl)"
 		else
 			info "verifying sha256 ($EXPECTED)"
 			actual=""
@@ -164,10 +164,10 @@ if curl -fsSL "$BASE_URL/SHA256SUMS.txt" -o "$TMP/SHA256SUMS.txt"; then
 			[ "$actual" = "$EXPECTED" ] || err "checksum mismatch — the download is corrupted or was tampered with"
 		fi
 	else
-		info "no checksum for $ASSET in SHA256SUMS.txt — skipping verification"
+		err "no checksum for $ASSET in SHA256SUMS.txt"
 	fi
 else
-	info "no SHA256SUMS.txt published for this release — skipping verification"
+	err "no SHA256SUMS.txt published for this release"
 fi
 
 info "extracting"

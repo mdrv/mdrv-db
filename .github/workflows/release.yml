@@ -86,7 +86,11 @@ jobs:
           cp $B pkg/$D/mdrv-db$EXE
           cp mdrv-db.yaml README.md LICENSE pkg/$D/
           if [ -n "$EXE" ]; then
-            tar -a -cf $D.zip -C pkg $D   # bsdtar: zip by extension
+            # bash's tar on windows runners is GNU tar: its -a ignores the
+            # .zip suffix and silently writes a plain tar — use the bsdtar
+            # at System32 and assert the zip magic before upload
+            /c/Windows/System32/tar.exe -a -cf $D.zip -C pkg $D
+            [ "$(head -c2 $D.zip)" = PK ] || { echo "not a zip"; exit 1; }
           else
             tar -czf $D.tar.gz -C pkg $D
           fi

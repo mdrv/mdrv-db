@@ -1,4 +1,4 @@
-# install.ps1 — install prebuilt mdrv-db on Windows in one command.
+# install.ps1 -- install prebuilt mdrv-db on Windows in one command.
 # Downloads the right archive from GitHub Releases, verifies it against the
 # release's SHA256SUMS.txt, and installs mdrv-db.exe into
 # %LOCALAPPDATA%\Programs\mdrv-db, then adds that directory to the user PATH.
@@ -88,7 +88,7 @@ function Get-TargetTriple {
 	# native ARM64, X86/x86 on 32-bit. Only x64 is a supported target today.
 	switch ($env:PROCESSOR_ARCHITECTURE) {
 		'AMD64' { return 'x86_64-pc-windows-msvc' }
-		'ARM64' { throw "ERROR: ARM64 Windows is not built yet — mdrv-db ships x64 only (see the release page)" }
+		'ARM64' { throw "ERROR: ARM64 Windows is not built yet -- mdrv-db ships x64 only (see the release page)" }
 		default { throw "ERROR: unsupported architecture '$($env:PROCESSOR_ARCHITECTURE)' (supported: x64)" }
 	}
 }
@@ -116,7 +116,7 @@ try {
 	try {
 		Invoke-WebRequest -Uri "$base_url/SHA256SUMS.txt" -OutFile $sums_path -UseBasicParsing
 	} catch {
-		Write-Information "==> no SHA256SUMS.txt published for this release — skipping verification"
+		throw "ERROR: SHA256SUMS.txt is missing from this release -- refusing to install an unverifiable binary"
 		$sums_path = $null
 	}
 	if ($sums_path) {
@@ -125,11 +125,11 @@ try {
 			$expected = ($line -split '\s+') | Select-Object -First 1
 			$actual = (Get-FileHash -Path $zip_path -Algorithm SHA256).Hash.ToLower()
 			if ($actual -ne $expected) {
-				throw "ERROR: checksum mismatch — the download is corrupted or was tampered with"
+				throw "ERROR: checksum mismatch -- the download is corrupted or was tampered with"
 			}
 			Write-Information "==> verifying sha256 ($expected)"
 		} else {
-			Write-Information "==> no checksum for $artifact in SHA256SUMS.txt — skipping verification"
+			throw "ERROR: no checksum for $artifact in SHA256SUMS.txt -- refusing to install"
 		}
 	}
 
@@ -185,9 +185,9 @@ function Add-Path($LiteralPath) {
 if (-not $NoModifyPath) {
 	if (Add-Path $Destination) {
 		Write-Information ''
-		Write-Information "PATH updated (user) — open a new terminal, then run: mdrv-db --help"
+		Write-Information "PATH updated (user) -- open a new terminal, then run: mdrv-db --help"
 	} else {
-		Write-Information "    $Destination is already on PATH — run: mdrv-db --help"
+		Write-Information "    $Destination is already on PATH -- run: mdrv-db --help"
 	}
 } else {
 	Write-Information ''
