@@ -139,7 +139,19 @@ fn temp_write_and_sync(path: &Path, bytes: &[u8]) -> io::Result<()> {
     f.sync_all()
 }
 
+/// fsync the directory so a just-renamed CAS entry is durable. POSIX-only
+/// notion: Windows can't fsync a directory handle (`FlushFileBuffers` needs
+/// GENERIC_WRITE, which `File::open` on a directory doesn't grant — every
+/// promote/finish would die with "Access is denied (os error 5)"), so there
+/// it is a no-op; NTFS metadata is journaled and the rename has already
+/// completed by the time this runs.
 pub fn sync_dir(dir: impl AsRef<Path>) -> io::Result<()> {
+    #[cfg(windows)]
+    {
+        let _ = dir;
+        Ok(())
+    }
+    #[cfg(not(windows))]
     fs::File::open(dir)?.sync_all()
 }
 
