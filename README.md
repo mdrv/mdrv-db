@@ -35,6 +35,23 @@ first-class, all inspectable offline.
 `live` is single-owner (fjall + turso file locks); `recovery` is safe to sync offsite.
 Dumps/inspection never touch `live` while an app owns it — work on `recovery` copies.
 
+## Install (prebuilt)
+
+macOS & Linux (x86_64/aarch64):
+
+```sh
+curl -fsSL https://github.com/mdrv/mdrv-db/releases/latest/download/install.sh | sh
+```
+
+Windows (x64, PowerShell):
+
+```powershell
+irm https://github.com/mdrv/mdrv-db/releases/latest/download/install.ps1 | iex
+```
+
+macOS & Windows targets are experimental as of 0.6.1; Linux is the
+battle-tested platform.
+
 ## Build
 
 ```bash
