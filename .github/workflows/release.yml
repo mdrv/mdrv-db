@@ -3,12 +3,19 @@ name: release
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      only_npm:
+        description: "Build + publish only the npm side (crates/release/aur already done)"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
 
 jobs:
   build:
+    if: inputs.only_npm != true
     strategy:
       matrix:
         include:
@@ -88,6 +95,7 @@ jobs:
             mdrv-db-*.zip
 
   release:
+    if: inputs.only_npm != true
     needs: build
     runs-on: ubuntu-latest
     outputs:
@@ -103,16 +111,21 @@ jobs:
           generate_release_notes: true
 
   crates:
+    if: inputs.only_npm != true
     needs: build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo publish --locked -p mdrv-db
+      # skip when the version is already published (idempotent re-runs)
+      - run: |
+          V="${GITHUB_REF_NAME#v}"
+          curl -fsSL -A "mdrv-db-release" "https://crates.io/api/v1/crates/mdrv-db/$V" | grep -q "\"vers\":\"$V\"" || cargo publish --locked -p mdrv-db
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
   npm-build:
+    if: ${{ !cancelled() && (inputs.only_npm == true || needs.build.result == 'success') }}
     needs: build
     strategy:
       matrix:
@@ -149,6 +162,7 @@ jobs:
           path: packages/db/*.node
 
   npm-publish:
+    if: ${{ !cancelled() && (inputs.only_npm == true || needs.npm-build.result == 'success') }}
     needs: npm-build
     runs-on: ubuntu-latest
     steps:
@@ -180,6 +194,7 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   aur:
+    if: inputs.only_npm != true
     needs: [release, crates]
     runs-on: ubuntu-latest
     container:
@@ -222,6 +237,5 @@ jobs:
             git config user.name 'Umar Alfarouk' && \
             git config user.email 'medrivia@gmail.com' && \
             git add -A && \
-            GIT_SSH_COMMAND='ssh -i ~/.ssh/id_ed25519' \
-            git commit -m 'updpkg: v$V' && \
+            { GIT_SSH_COMMAND='ssh -i ~/.ssh/id_ed25519' git commit -m 'updpkg: v$V' || echo 'aur: no changes for v$V'; } && \
             GIT_SSH_COMMAND='ssh -i ~/.ssh/id_ed25519' git push"
