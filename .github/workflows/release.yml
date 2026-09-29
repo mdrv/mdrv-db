@@ -16,7 +16,16 @@ jobs:
           - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu }
           - { os: ubuntu-latest, target: x86_64-unknown-linux-musl }
           - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-musl }
+          # darwin + windows are experimental as of 0.6.1 (full platform
+          # testing lands in 0.6.2); x86_64-apple-darwin cross-compiles from
+          # the Apple Silicon runner (macos-13 is retired) via the shared SDK
+          - { os: macos-latest, target: aarch64-apple-darwin }
+          - { os: macos-latest, target: x86_64-apple-darwin }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc }
     runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
     env:
       # cc-rs C deps (zstd-sys, mimalloc-sys, simsimd, blake3) need a musl
       # cc when building the musl targets; each runner is host-native, so
@@ -49,22 +58,34 @@ jobs:
         # the bin requires the lib's `turso` feature (TursoPort lives there)
         run: cargo build --release --locked --target ${{ matrix.target }} -p mdrv-db --features turso
       - name: Smoke the binary
-        run: target/${{ matrix.target }}/release/mdrv-db --version
+        run: |
+          EXE=""
+          case ${{ matrix.target }} in *windows*) EXE=.exe ;; esac
+          target/${{ matrix.target }}/release/mdrv-db$EXE --version
       - name: Package
         run: |
-          B=target/${{ matrix.target }}/release/mdrv-db
-          $B completion > mdrv-db.yaml
           V="${GITHUB_REF_NAME#v}"
-          D=mdrv-db-v$V-${{ matrix.target }}
+          T=${{ matrix.target }}
+          EXE=""
+          case $T in *windows*) EXE=.exe ;; esac
+          B=target/$T/release/mdrv-db$EXE
+          $B completion > mdrv-db.yaml
+          D=mdrv-db-v$V-$T
           mkdir -p pkg/$D
-          cp $B pkg/$D/mdrv-db
+          cp $B pkg/$D/mdrv-db$EXE
           cp mdrv-db.yaml README.md LICENSE pkg/$D/
-          tar -czf $D.tar.gz -C pkg $D
-          sha256sum $D.tar.gz
+          if [ -n "$EXE" ]; then
+            tar -a -cf $D.zip -C pkg $D   # bsdtar: zip by extension
+          else
+            tar -czf $D.tar.gz -C pkg $D
+          fi
+          if command -v sha256sum >/dev/null 2>&1; then sha256sum $D.*; else shasum -a 256 $D.*; fi
       - uses: actions/upload-artifact@v7
         with:
           name: dist-${{ matrix.target }}
-          path: mdrv-db-*.tar.gz
+          path: |
+            mdrv-db-*.tar.gz
+            mdrv-db-*.zip
 
   release:
     needs: build
@@ -96,17 +117,32 @@ jobs:
     strategy:
       matrix:
         include:
-          - { os: ubuntu-latest, suffix: linux-x64-gnu }
-          - { os: ubuntu-24.04-arm, suffix: linux-arm64-gnu }
+          - { os: ubuntu-latest, suffix: linux-x64-gnu, lib: libmdrv_db_napi.so, t: "" }
+          - { os: ubuntu-24.04-arm, suffix: linux-arm64-gnu, lib: libmdrv_db_napi.so, t: "" }
+          # experimental as of 0.6.1; darwin-x64 cross-compiles from arm64
+          - { os: macos-latest, suffix: darwin-arm64, lib: libmdrv_db_napi.dylib, t: "" }
+          - { os: macos-latest, suffix: darwin-x64, lib: libmdrv_db_napi.dylib, t: x86_64-apple-darwin }
+          - { os: windows-latest, suffix: win32-x64, lib: mdrv_db_napi.dll, t: "" }
     runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.t }}
       - uses: Swatinem/rust-cache@v2
       - name: Build napi binding (${{ matrix.suffix }})
         run: |
-          cargo build --release --locked -p mdrv-db-napi
-          cp target/release/libmdrv_db_napi.so packages/db/mdrv-db.${{ matrix.suffix }}.node
+          OUT=target/release
+          if [ -n "${{ matrix.t }}" ]; then
+            cargo build --release --locked --target ${{ matrix.t }} -p mdrv-db-napi
+            OUT=target/${{ matrix.t }}/release
+          else
+            cargo build --release --locked -p mdrv-db-napi
+          fi
+          cp $OUT/${{ matrix.lib }} packages/db/mdrv-db.${{ matrix.suffix }}.node
       - uses: actions/upload-artifact@v7
         with:
           name: napi-${{ matrix.suffix }}
