@@ -23,9 +23,49 @@ pub fn default_path() -> Option<PathBuf> {
     if let Ok(p) = std::env::var("MDRV_DB_CONFIG") {
         return Some(PathBuf::from(p));
     }
-    std::env::var("HOME")
-        .ok()
-        .map(|h| Path::new(&h).join(".config/mdrv-db/config.toml"))
+    config_home().map(|d| d.join("mdrv-db/config.toml"))
+}
+
+/// Per-OS data home: `$XDG_DATA_HOME`/`~/.local/share` (linux & friends),
+/// `~/Library/Application Support` (macOS), `%LOCALAPPDATA%` (Windows).
+fn data_home() -> Option<PathBuf> {
+    match std::env::consts::OS {
+        "windows" => std::env::var_os("LOCALAPPDATA").map(PathBuf::from),
+        "macos" => {
+            std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Library/Application Support"))
+        }
+        _ => std::env::var_os("XDG_DATA_HOME")
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share"))),
+    }
+}
+
+/// Fleet data root used when nothing is configured — the per-OS standard
+/// location, never a hardcoded path. Falls back to a relative dir when no
+/// home is resolvable (headless/CI).
+pub fn default_data_root() -> PathBuf {
+    data_home().unwrap_or_default().join("mdrv-db")
+}
+
+/// Slug data dir used when neither `data_dir` nor `sched.data_root` is set.
+pub fn default_data_dir(slug: &str) -> PathBuf {
+    default_data_root().join(slug)
+}
+
+/// Per-OS config home: `$XDG_CONFIG_HOME`/`~/.config`,
+/// `~/Library/Application Support` (macOS), `%APPDATA%` (Windows).
+pub fn config_home() -> Option<PathBuf> {
+    match std::env::consts::OS {
+        "windows" => std::env::var_os("APPDATA").map(PathBuf::from),
+        "macos" => {
+            std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Library/Application Support"))
+        }
+        _ => std::env::var_os("XDG_CONFIG_HOME")
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config"))),
+    }
 }
 
 fn load(file: &Path) -> Result<toml::Value, String> {
@@ -35,7 +75,7 @@ fn load(file: &Path) -> Result<toml::Value, String> {
 }
 
 /// Find the engine name (fleet slug) whose data_dir matches, e.g.
-/// [db.myapp] data_dir = /x/db/myapp -> "myapp". Comparison is
+/// [db.myapp] data_dir = ~/.local/share/mdrv-db/myapp -> "myapp". Comparison is
 /// canonicalized when possible, string-based otherwise.
 pub fn lookup_name(file: &Path, data_dir: &Path) -> Option<String> {
     let cfg = load(file).ok()?;
@@ -98,7 +138,7 @@ pub fn run(file: Option<PathBuf>, check: bool, set: Option<String>) -> ExitCode 
                 .and_then(|v| v.as_str())
                 .map(PathBuf::from)
                 .or_else(|| root.map(|r| r.join(slug)))
-                .unwrap_or_else(|| PathBuf::from("/x/db").join(slug));
+                .unwrap_or_else(|| default_data_dir(slug));
             let live_ok = data_dir.join("live/fjall").is_dir();
             let dur = t
                 .get("durability")
@@ -154,7 +194,7 @@ fn fmt_cadence(v: Option<&toml::Value>) -> String {
     }
 }
 
-/// `mdrv-db config --set db.myapp.data_dir=/x/db/myapp`
+/// `mdrv-db config --set db.myapp.data_dir=~/.local/share/mdrv-db/myapp`
 /// Writes the TOML back preserving comments where possible (single-key edit).
 fn set_prop(path: &Path, expr: &str) -> ExitCode {
     let (key, val) = match expr.split_once('=') {

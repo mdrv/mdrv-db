@@ -68,7 +68,7 @@ fn jobs(cfg: &toml::Value) -> Vec<Job> {
             .and_then(|v| v.as_str())
             .map(PathBuf::from)
             .or_else(|| data_root.as_ref().map(|r| r.join(slug)))
-            .unwrap_or_else(|| PathBuf::from("/x/db").join(slug));
+            .unwrap_or_else(|| crate::config::default_data_dir(slug));
         let name = t.get("name").and_then(|v| v.as_str()).map(String::from);
         let (cron, retention_days, keep, min_free) = match t.get("backup") {
             Some(b) => (
@@ -418,7 +418,7 @@ pub fn run(
         .and_then(|s| s.get("data_root"))
         .and_then(|v| v.as_str())
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/x/db"));
+        .unwrap_or_else(crate::config::default_data_root);
     // [daemon] host/port in the fleet config are the defaults; flags win.
     let daemon_cfg = cfg.get("daemon");
     let bind = bind.or_else(|| {
@@ -542,15 +542,9 @@ pub fn install() -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    let config_dir = match std::env::var("XDG_CONFIG_HOME") {
-        Ok(v) if !v.is_empty() => PathBuf::from(v),
-        _ => match std::env::var("HOME") {
-            Ok(h) => PathBuf::from(h).join(".config"),
-            Err(_) => {
-                eprintln!("cannot resolve config dir: no XDG_CONFIG_HOME or HOME");
-                return ExitCode::from(1);
-            }
-        },
+    let Some(config_dir) = crate::config::config_home() else {
+        eprintln!("cannot resolve config dir: no XDG_CONFIG_HOME/HOME/APPDATA");
+        return ExitCode::from(1);
     };
     let dir = config_dir.join("systemd/user");
     if let Err(e) = std::fs::create_dir_all(&dir) {

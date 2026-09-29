@@ -13,23 +13,23 @@ first-class, all inspectable offline.
 
 ## Status (v2)
 
-| Piece                                                            | State                                                                             |
-| ---------------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| Engine crate `mdrv_db` (WAL/recovery/blobs/backup/verify/report) | ✅ ported from v1, crash-matrix-proven there                                      |
-| CLI `mdrv-db` (clap + completion)                                | ✅ `init` `info` `dump` `config` `verify` `backup` `restore` `checkpoint` `prune` |
-| Fleet config (`~/.config/mdrv-db/config.toml`)                   | ✅ read/check/set via CLI                                                         |
-| `@mdrv/db` npm binding (napi) v2 (x64 + arm64, streaming blobs)  | ✅ published (crates.io + npm 0.2.1)                                              |
-| `@mdrv/db-events` (outbox + `/events` + consumer poller)         | ✅ in repo (`packages/db-events`)                                                  |
-| `daemon run` / `status` / `install` (scheduler: backup, verify, retention) | ✅ shipped                                                                          |
-| Admin REST + SSE + embedded console (`packages/console`)         | ✅ shipped (v1: read-mostly + backup-now/prune)                                      |
+| Piece                                                                      | State                                                                             |
+| -------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| Engine crate `mdrv_db` (WAL/recovery/blobs/backup/verify/report)           | ✅ ported from v1, crash-matrix-proven there                                      |
+| CLI `mdrv-db` (clap + completion)                                          | ✅ `init` `info` `dump` `config` `verify` `backup` `restore` `checkpoint` `prune` |
+| Fleet config (`~/.config/mdrv-db/config.toml`)                             | ✅ read/check/set via CLI                                                         |
+| `@mdrv/db` npm binding (napi) v2 (x64 + arm64, streaming blobs)            | ✅ published (crates.io + npm 0.2.1)                                              |
+| `@mdrv/db-events` (outbox + `/events` + consumer poller)                   | ✅ in repo (`packages/db-events`)                                                 |
+| `daemon run` / `status` / `install` (scheduler: backup, verify, retention) | ✅ shipped                                                                        |
+| Admin REST + SSE + embedded console (`packages/console`)                   | ✅ shipped (v1: read-mostly + backup-now/prune)                                   |
 
 ## Layout (per-database)
 
 ```
-/x/db/<slug>/
+~/.local/share/mdrv-db/<slug>/
 ├── live/        ← owned engine: live/fjall/ + live/app.db + live/blobs/   (rsync: IGNORE)
 └── recovery/    ← backup output: <ts>-offline/{manifest.json, app.db, fjall/, blobs/}  (rsync: THIS)
-├── daemon-state.json ← daemon run log (last/next run, result, backup)             
+├── daemon-state.json ← daemon run log (last/next run, result, backup)
 ```
 
 `live` is single-owner (fjall + turso file locks); `recovery` is safe to sync offsite.
@@ -52,17 +52,17 @@ mdrv-db completion install
 ## CLI
 
 ```bash
-mdrv-db init /x/db/app.example.id            # create live/ + recovery/
-mdrv-db info /x/db/main.example.id                   # keyspace sizes, applied_lsn, blobs
-mdrv-db dump /x/db/main.example.id wal \
+mdrv-db init ~/.local/share/mdrv-db/app.example.id            # create live/ + recovery/
+mdrv-db info ~/.local/share/mdrv-db/main.example.id                   # keyspace sizes, applied_lsn, blobs
+mdrv-db dump ~/.local/share/mdrv-db/main.example.id wal \
     --since '2026-09-10 04:50' --filter 'register' --status committed --reverse
-mdrv-db dump /x/db/main.example.id report --level 3 --limit 50
+mdrv-db dump ~/.local/share/mdrv-db/main.example.id report --level 3 --limit 50
 mdrv-db config --check                           # fleet sanity (missing live/fjall etc.)
 mdrv-db config --set 'db.mid.durability="per-write"'
-mdrv-db verify /x/db/main.example.id                 # WAL hashes, blob re-hash, PRAGMA integrity
-mdrv-db backup /x/db/main.example.id                 # → recovery/<ts>-offline + manifest (blake3)
-mdrv-db restore /x/db/main.example.id/recovery/<ts>-offline --data-dir /x/db/main.example.id
-mdrv-db checkpoint /x/db/main.example.id --compact   # prune WAL ≤ applied_lsn (+ major compact)
+mdrv-db verify ~/.local/share/mdrv-db/main.example.id                 # WAL hashes, blob re-hash, PRAGMA integrity
+mdrv-db backup ~/.local/share/mdrv-db/main.example.id                 # → recovery/<ts>-offline + manifest (blake3)
+mdrv-db restore ~/.local/share/mdrv-db/main.example.id/recovery/<ts>-offline --data-dir ~/.local/share/mdrv-db/main.example.id
+mdrv-db checkpoint ~/.local/share/mdrv-db/main.example.id --compact   # prune WAL ≤ applied_lsn (+ major compact)
 mdrv-db daemon run --once                            # run every scheduled job now, then exit
 mdrv-db daemon run                                   # scheduler + admin REST + console on 127.0.0.1:8300
 mdrv-db daemon run --port 8301 --console ./dist      # flags override config/defaults
@@ -84,12 +84,12 @@ durability = "per-write" # per-write | group-commit-10ms
 verify = "weekly"
 
 [sched]
-data_root = "/x/db"
+data_root = "~/.local/share/mdrv-db"
 
 [db.mid]
 name = "Example App"
 owner = "alice"
-data_dir = "/x/db/main.example.id"
+data_dir = "~/.local/share/mdrv-db/main.example.id"
 rpc = "127.0.0.1:8100/mdrv/rpc" # admin RPC when the owner app is up
 token_env = "MID_ADMIN_TOKEN"
 [db.mid.backup]
@@ -109,7 +109,7 @@ under `live/`. Migration is the backup→restore drill:
 
 ```bash
 mdrv-db backup /old/flat/dir --dest /tmp/mig          # v1 flat layout works (live_dir falls back)
-mdrv-db restore /tmp/mig --data-dir /x/db/<slug>      # writes the NEW live/ layout + verifies
+mdrv-db restore /tmp/mig --data-dir ~/.local/share/mdrv-db/<slug>      # writes the NEW live/ layout + verifies
 ```
 
 ## Roadmap
@@ -127,4 +127,3 @@ mdrv-db restore /tmp/mig --data-dir /x/db/<slug>      # writes the NEW live/ lay
   skips a job when the backup volume has less free space than `min_free` (default
   1 GiB, `0` disables) — a skip is surfaced in status/SSE, never auto-deletes.
 - releases: bump manifests → commit → tag `vX.Y.Z` (CI publishes crates.io + npm + AUR).
-

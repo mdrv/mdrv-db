@@ -137,7 +137,7 @@ struct Cli {
 enum Cmd {
     /// Create a data-dir skeleton: <dir>/live + <dir>/recovery
     Init {
-        /// Database directory, e.g. /x/db/app.example.id
+        /// Database directory, e.g. ~/.local/share/mdrv-db/app.example.id
         #[arg(value_hint = ValueHint::DirPath)]
         data_dir: PathBuf,
     },
@@ -210,7 +210,7 @@ enum Cmd {
         /// Validate entries (exit 1 on problems)
         #[arg(long)]
         check: bool,
-        /// Set one property: --set 'db.myapp.data_dir=/x/db/myapp'
+        /// Set one property: --set 'db.myapp.data_dir=~/.local/share/mdrv-db/myapp'
         #[arg(long)]
         set: Option<String>,
     },
@@ -327,14 +327,8 @@ fn completion_install() -> Result<std::path::PathBuf, String> {
     let mut buf = Vec::new();
     let mut cmd = Cli::command();
     clap_complete::generate(carapace_spec_clap::Spec, &mut cmd, "mdrv-db", &mut buf);
-    let config_dir = match std::env::var("XDG_CONFIG_HOME") {
-        Ok(v) if !v.is_empty() => std::path::PathBuf::from(v),
-        _ => std::path::PathBuf::from(
-            std::env::var("HOME")
-                .map_err(|_| "cannot resolve config dir: no XDG_CONFIG_HOME or HOME")?,
-        )
-        .join(".config"),
-    };
+    let config_dir = crate::config::config_home()
+        .ok_or_else(|| "cannot resolve config dir: no XDG_CONFIG_HOME/HOME/APPDATA".to_string())?;
     let dir = config_dir.join("carapace").join("specs");
     std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create {dir:?}: {e}"))?;
     let path = dir.join("mdrv-db.yaml");
