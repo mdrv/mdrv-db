@@ -1,0 +1,9 @@
+# Node-API symbols (`napi_*`) resolve at dylib load time — they come from
+# the Bun/Node host process, not from any link-time library. macOS's
+# two-level namespace requires `-undefined dynamic_lookup` for that; Linux
+# and Windows cdylib links tolerate it by default.
+[target.aarch64-apple-darwin]
+rustflags = ["-C", "link-arg=-undefined", "-C", "link-arg=dynamic_lookup"]
+
+[target.x86_64-apple-darwin]
+rustflags = ["-C", "link-arg=-undefined", "-C", "link-arg=dynamic_lookup"]
