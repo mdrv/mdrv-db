@@ -4,7 +4,7 @@ members = ["crates/mdrv-db", "crates/mdrv-db-napi"]
 
 [workspace.package]
 edition = "2021"
-version = "0.5.1"
+version = "0.6.0"
 license = "MIT"
 repository = "https://github.com/mdrv/mdrv-db"
 
@@ -17,7 +17,7 @@ blake3 = "1"
 sha2 = "0.10"
 thiserror = "2"
 regex = "1"
-turso = "0.7"
+turso = "0.8"
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
 carapace_spec_clap = "1"

@@ -142,8 +142,13 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("mkdir");
         let port = TursoPort::open(dir.join("app.db")).expect("open port");
-        let mut e = Engine::open(&dir, "upperadd-test", Box::new(port), EngineConfig::default())
-            .expect("open engine");
+        let mut e = Engine::open(
+            &dir,
+            "upperadd-test",
+            Box::new(port),
+            EngineConfig::default(),
+        )
+        .expect("open engine");
         e.bootstrap(&["CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT NOT NULL)".into()])
             .expect("bootstrap");
         let out = e

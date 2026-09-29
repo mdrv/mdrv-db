@@ -1,6 +1,6 @@
 {
 	"name": "@mdrv/db-events",
-	"version": "0.5.1",
+	"version": "0.6.0",
 	"license": "MIT",
 	"type": "module",
 	"description": "Transactional-outbox event kit for mdrv-db: outbox ops, /events endpoint, atomic-cursor consumer poller",
