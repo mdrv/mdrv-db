@@ -26,9 +26,9 @@ jobs:
           # darwin + windows are experimental as of 0.6.1 (full platform
           # testing lands in 0.6.2); x86_64-apple-darwin cross-compiles from
           # the Apple Silicon runner (macos-13 is retired) via the shared SDK
-          - { os: macos-latest, target: aarch64-apple-darwin }
-          - { os: macos-latest, target: x86_64-apple-darwin }
-          - { os: windows-latest, target: x86_64-pc-windows-msvc }
+          - { os: macos-latest, target: aarch64-apple-darwin, dt: "11.0" }
+          - { os: macos-latest, target: x86_64-apple-darwin, dt: "10.12" }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc, dt: "11.0" }
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -39,6 +39,10 @@ jobs:
       # musl-gcc always matches the one target built there. Harmless for GNU.
       CC_x86_64_unknown_linux_musl: musl-gcc
       CC_aarch64_unknown_linux_musl: musl-gcc
+      # pin C deps to rustc's minimum for each darwin target; without this,
+      # cc-rs objects inherit the runner SDK's minOS and the binary silently
+      # requires a bleeding-edge macOS (values match rustc target minimums)
+      MACOSX_DEPLOYMENT_TARGET: ${{ matrix.dt || '11.0' }}
     steps:
       - uses: actions/checkout@v7
       - name: Install musl tools
@@ -140,13 +144,15 @@ jobs:
           - { os: ubuntu-latest, suffix: linux-x64-gnu, lib: libmdrv_db_napi.so, t: "" }
           - { os: ubuntu-24.04-arm, suffix: linux-arm64-gnu, lib: libmdrv_db_napi.so, t: "" }
           # experimental as of 0.6.1; darwin-x64 cross-compiles from arm64
-          - { os: macos-latest, suffix: darwin-arm64, lib: libmdrv_db_napi.dylib, t: "" }
-          - { os: macos-latest, suffix: darwin-x64, lib: libmdrv_db_napi.dylib, t: x86_64-apple-darwin }
-          - { os: windows-latest, suffix: win32-x64, lib: mdrv_db_napi.dll, t: "" }
+          - { os: macos-latest, suffix: darwin-arm64, lib: libmdrv_db_napi.dylib, t: "", dt: "11.0" }
+          - { os: macos-latest, suffix: darwin-x64, lib: libmdrv_db_napi.dylib, t: x86_64-apple-darwin, dt: "10.12" }
+          - { os: windows-latest, suffix: win32-x64, lib: mdrv_db_napi.dll, t: "", dt: "11.0" }
     runs-on: ${{ matrix.os }}
     defaults:
       run:
         shell: bash
+    env:
+      MACOSX_DEPLOYMENT_TARGET: ${{ matrix.dt || '11.0' }}
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
