@@ -1,6 +1,6 @@
 {
 	"name": "@mdrv/db",
-	"version": "0.6.0",
+	"version": "0.6.1",
 	"license": "MIT",
 	"type": "module",
 	"description": "mdrv-db for Bun: Fjall durability envelope (WAL/recovery/integrity) around Turso + content-addressed blobs, via napi-rs",
@@ -38,7 +38,9 @@
 		"access": "public"
 	},
 	"os": [
-		"linux"
+		"linux",
+		"darwin",
+		"win32"
 	],
 	"cpu": [
 		"x64",
