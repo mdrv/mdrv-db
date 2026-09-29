@@ -7,6 +7,7 @@ mod config;
 mod daemon;
 mod dump;
 mod engine_open;
+mod rebuild;
 mod selftest;
 mod server;
 
@@ -179,6 +180,16 @@ enum Cmd {
         data_dir: PathBuf,
         #[arg(long)]
         name: Option<String>,
+    },
+    /// Rebuild live/app.db from a recovery backup, keep the journal, replay the
+    /// committed tail above the backup watermark — owner must be stopped
+    Rebuild {
+        /// Database directory (contains live/ and recovery/)
+        #[arg(value_hint = ValueHint::DirPath)]
+        data_dir: PathBuf,
+        /// Specific backup dir (default: newest under <data_dir>/recovery)
+        #[arg(long, value_hint = ValueHint::DirPath)]
+        backup: Option<PathBuf>,
     },
     /// Checkpoint the journal up to applied_lsn (prunes wal/marks below it) — owner must be stopped
     Checkpoint {
@@ -489,6 +500,22 @@ fn main() -> ExitCode {
                 Ok(format!("restore + verify: {v}"))
             })
         }
+        Cmd::Rebuild { data_dir, backup } => match rebuild::run(&data_dir, backup.as_deref()) {
+            Ok(v) => {
+                let ok = v.get("ok").and_then(|b| b.as_bool()).unwrap_or(false);
+                if ok {
+                    println!("rebuild OK\n{v}");
+                    ExitCode::SUCCESS
+                } else {
+                    eprintln!("rebuild completed but verification FAILED\n{v}");
+                    ExitCode::from(1)
+                }
+            }
+            Err(e) => {
+                eprintln!("{e}");
+                ExitCode::from(1)
+            }
+        },
         Cmd::Checkpoint {
             data_dir,
             compact,

@@ -23,7 +23,7 @@ OUT=$($BIN completion print 2>&1) && expect_contains "completion print spec" "$O
 OUT=$($BIN completion print --shell zsh 2>&1) && expect_contains "completion print --shell zsh" "$OUT" "#compdef mdrv-db" || bad "completion print --shell zsh failed"
 if $BIN carapace install >/dev/null 2>&1; then bad "carapace subcommand should be gone"; else ok "carapace subcommand removed"; fi
 OUT=$($BIN --help 2>&1)
-for sub in init info dump verify backup restore checkpoint prune config completion blob selftest; do
+for sub in init info dump verify backup restore rebuild checkpoint prune config completion blob selftest; do
   expect_contains "help lists '$sub'" "$OUT" "$sub"
 done
 
@@ -228,6 +228,27 @@ expect_contains "blob delete names hash" "$OUT" "deleted $WANT"
 $BIN blob get "$DB" "$WANT" >/dev/null 2>&1; check "blob get after delete fails" 1 $?
 $BIN blob delete "$DB" "$WANT" >/dev/null 2>&1; check "blob delete absent fails" 1 $?
 $BIN blob delete "$DB" "NOTAHASH" >/dev/null 2>&1; check "blob delete invalid hash fails" 1 $?
+
+# --- 9b. rebuild: port replaced from newest backup, journal tail preserved ---
+RDB=$T/rdb
+OUT=$($BIN init "$RDB" 2>&1); check "rebuild: init rdb" 0 $?
+OUT=$($BIN blob put "$RDB" --file "$BIG" 2>&1); check "rebuild: pre-backup blob" 0 $?
+OUT=$($BIN backup "$RDB" 2>&1); check "rebuild: backup" 0 $?
+BK2=$(printf '%s\n' "$OUT" | grep -o "$T/rdb/recovery/[0-9]*-offline" | head -1)
+[ -n "$BK2" ] && ok "rebuild: backup dest parsed" || bad "rebuild: no backup dest"
+printf 'rebuild-tail' > "$T/small.bin"
+OUT=$($BIN blob put "$RDB" --file "$T/small.bin" 2>&1); check "rebuild: post-backup blob" 0 $?
+H2=$(printf '%s\n' "$OUT" | cut -d' ' -f1)
+dd if=/dev/urandom of="$RDB/live/app.db" bs=4096 count=8 conv=notrunc 2>/dev/null
+$BIN verify "$RDB" >/dev/null 2>&1; check "rebuild: corrupted port detected" 1 $?
+OUT=$($BIN rebuild "$RDB" 2>&1); check "rebuild replaces port from newest backup" 0 $?
+expect_contains "rebuild reports applied_lsn" "$OUT" '"applied_lsn"'
+expect_contains "rebuild verify ok" "$OUT" '"ok":true'
+[ -n "$(ls -A "$RDB/live/quarantine" 2>/dev/null)" ] && ok "damaged port quarantined" || bad "quarantine empty"
+OUT=$($BIN blob get "$RDB" "$H2" 2>&1); check "rebuild: post-backup blob survives" 0 $?
+$BIN verify "$RDB" >/dev/null 2>&1; check "rebuild: verify clean after" 0 $?
+$BIN rebuild "$RDB" --backup "$T/nope" >/dev/null 2>&1; check "rebuild: bad --backup fails" 1 $?
+mkdir -p "$T/nobk" && $BIN rebuild "$T/nobk" >/dev/null 2>&1; check "rebuild: no backups fails" 1 $?
 
 echo
 # --- carapace install (user spec dir; system-wide is ignored by carapace-bin) ---

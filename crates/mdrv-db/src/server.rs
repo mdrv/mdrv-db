@@ -504,7 +504,10 @@ pub(crate) struct Opts {
 
 /// Blocking entry called from `daemon::run` (already inside no runtime).
 pub(crate) fn serve(opts: Opts) -> Result<(), String> {
-    // Single-instance guard on the fleet data root.
+    // Single-instance guard on the fleet data root. Create the root first —
+    // the per-OS default (~/.local/share/mdrv-db) may not exist yet.
+    std::fs::create_dir_all(&opts.data_root)
+        .map_err(|e| format!("cannot create data root {}: {e}", opts.data_root.display()))?;
     let lock_path = opts.data_root.join(".mdrv-db-daemon.lock");
     let lock = std::fs::OpenOptions::new()
         .create(true)
