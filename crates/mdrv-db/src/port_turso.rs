@@ -179,4 +179,28 @@ mod tests {
         assert_eq!(p.integrity_check().expect("integrity_check"), "ok");
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn bootstrap_error_context() {
+        let dir = std::env::temp_dir().join(format!("mdrv-db-boot-ctx-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let port = TursoPort::open(dir.join("app.db")).expect("open port");
+        let mut e = Engine::open(&dir, "boot-ctx", Box::new(port), EngineConfig::default())
+            .expect("open engine");
+        let err = e
+            .bootstrap(&[
+                "CREATE TABLE ok (id INTEGER PRIMARY KEY)".into(),
+                "CREATE TABLE broken (id TEXT".into(),
+            ])
+            .expect_err("bad sql must fail");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("bootstrap statement 2/2"),
+            "no statement index: {msg}"
+        );
+        assert!(msg.contains("CREATE TABLE broken"), "no sql head: {msg}");
+        e.close().expect("close");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

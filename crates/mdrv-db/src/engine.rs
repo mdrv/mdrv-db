@@ -462,8 +462,23 @@ impl Engine {
 
     /// Trusted DDL/migrations (called by the owning app at boot, not replayed).
     pub fn bootstrap(&self, statements: &[String]) -> Result<(), MdrvDbError> {
-        for s in statements {
-            self.port.exec(s).map_err(MdrvDbError::Port)?;
+        let total = statements.len();
+        for (i, s) in statements.iter().enumerate() {
+            self.port.exec(s).map_err(|e| {
+                // Terse parser errors ("incomplete input", no offset) force
+                // callers with a multi-statement schema batch to bisect by
+                // hand — tag the failing statement and an SQL head instead.
+                let mut head: String = s.split_whitespace().collect::<Vec<_>>().join(" ");
+                if head.chars().count() > 100 {
+                    head = head.chars().take(100).collect();
+                    head.push_str("...");
+                }
+                MdrvDbError::Usage(format!(
+                    "bootstrap statement {}/{} failed: {e}; sql: {head}",
+                    i + 1,
+                    total
+                ))
+            })?;
         }
         Ok(())
     }
