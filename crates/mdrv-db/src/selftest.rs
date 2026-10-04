@@ -54,11 +54,11 @@ pub fn run(root: &Path) -> ExitCode {
         let status = Command::new(&exe)
             .args([
                 "selftest-child",
-                dir.to_str().unwrap(),
+                &dir.to_string_lossy(),
                 fault,
                 if *fsync { "1" } else { "0" },
                 &abort_after.to_string(),
-                progress.to_str().unwrap(),
+                &progress.to_string_lossy(),
             ])
             .status();
         let crashed = match status {

@@ -38,3 +38,15 @@ pub fn safe_ident(s: &str) -> Result<&str, String> {
         Err(format!("unsafe identifier: {s:?}"))
     }
 }
+
+/// One-line SQL excerpt for error messages: whitespace collapsed, at most
+/// 100 chars plus an ellipsis. Parser errors ("incomplete input") carry no
+/// offset, so a multi-statement batch is otherwise undiagnosable.
+pub(crate) fn sql_head(s: &str) -> String {
+    let mut head: String = s.split_whitespace().collect::<Vec<_>>().join(" ");
+    if head.chars().count() > 100 {
+        head = head.chars().take(100).collect();
+        head.push_str("...");
+    }
+    head
+}

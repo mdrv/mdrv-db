@@ -164,7 +164,7 @@ async fn login(AxState(app): AxState<Arc<App>>, Json(body): Json<serde_json::Val
         header::SET_COOKIE,
         format!("{COOKIE}={sid}; HttpOnly; SameSite=Strict; Path=/; Max-Age=604800")
             .parse()
-            .unwrap(),
+            .expect("cookie name and session id are server-generated ASCII"),
     );
     resp
 }
@@ -180,7 +180,7 @@ async fn logout(AxState(app): AxState<Arc<App>>, headers: HeaderMap) -> Response
         header::SET_COOKIE,
         format!("{COOKIE}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0")
             .parse()
-            .unwrap(),
+            .expect("cookie name is a compile-time constant"),
     );
     resp
 }

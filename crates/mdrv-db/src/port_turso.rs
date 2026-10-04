@@ -66,18 +66,32 @@ fn from_turso_value(v: turso::Value) -> PortValue {
     }
 }
 
+impl TursoPort {
+    /// Lock the connection. A poisoned mutex (a panic in a previous holder)
+    /// surfaces as an error instead of cascading a panic through the daemon.
+    fn lock_conn(&self) -> Result<std::sync::MutexGuard<'_, turso::Connection>, String> {
+        self.conn
+            .lock()
+            .map_err(|_| "port connection lock poisoned".to_string())
+    }
+}
+
 impl DataPort for TursoPort {
     fn exec_tx(&self, stmts: &[Stmt]) -> Result<u64, String> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.lock_conn()?;
         self.rt.block_on(async {
             let tx = conn.transaction().await.map_err(|e| e.to_string())?;
             let mut total = 0u64;
-            for s in stmts {
+            for (i, s) in stmts.iter().enumerate() {
                 let params = to_turso_params(&s.params)?;
-                total += tx
-                    .execute(&s.sql, params)
-                    .await
-                    .map_err(|e| e.to_string())?;
+                total += tx.execute(&s.sql, params).await.map_err(|e| {
+                    format!(
+                        "statement {}/{} failed: {e}; sql: {}",
+                        i + 1,
+                        stmts.len(),
+                        crate::port::sql_head(&s.sql)
+                    )
+                })?;
             }
             tx.commit().await.map_err(|e| e.to_string())?;
             Ok(total)
@@ -85,13 +99,13 @@ impl DataPort for TursoPort {
     }
 
     fn exec(&self, sql: &str) -> Result<u64, String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         self.rt
             .block_on(async { conn.execute(sql, ()).await.map_err(|e| e.to_string()) })
     }
 
     fn query(&self, sql: &str, params: &[PortValue]) -> Result<QueryOut, String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         self.rt.block_on(async {
             let params = to_turso_params(params)?;
             let mut rows = conn.query(sql, params).await.map_err(|e| e.to_string())?;
@@ -114,7 +128,7 @@ impl DataPort for TursoPort {
     }
 
     fn integrity_check(&self) -> Result<String, String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
         self.rt.block_on(async {
             let mut rows = conn
                 .query("PRAGMA integrity_check", ())

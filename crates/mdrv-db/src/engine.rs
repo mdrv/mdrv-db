@@ -7,7 +7,7 @@ use crate::entry::{
     MARK_LEN, MARK_PENDING,
 };
 use crate::now_ms;
-use crate::port::{safe_ident, DataPort, Stmt};
+use crate::port::{safe_ident, sql_head, DataPort, Stmt};
 use fjall::compaction::Fifo;
 use fjall::{Database, Keyspace, KeyspaceCreateOptions, PersistMode};
 use serde::{Deserialize, Serialize};
@@ -17,6 +17,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum MdrvDbError {
     #[error("fjall: {0}")]
     Fjall(#[from] fjall::Error),
@@ -468,15 +469,11 @@ impl Engine {
                 // Terse parser errors ("incomplete input", no offset) force
                 // callers with a multi-statement schema batch to bisect by
                 // hand — tag the failing statement and an SQL head instead.
-                let mut head: String = s.split_whitespace().collect::<Vec<_>>().join(" ");
-                if head.chars().count() > 100 {
-                    head = head.chars().take(100).collect();
-                    head.push_str("...");
-                }
                 MdrvDbError::Usage(format!(
-                    "bootstrap statement {}/{} failed: {e}; sql: {head}",
+                    "bootstrap statement {}/{} failed: {e}; sql: {}",
                     i + 1,
-                    total
+                    total,
+                    sql_head(s)
                 ))
             })?;
         }
