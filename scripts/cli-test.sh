@@ -33,7 +33,7 @@ cat > "$T/config.toml" << 'EOF'
 [defaults]
 durability = "per-write"
 [sched]
-data_root = "/x/db"
+data_root = "/nonexistent-mdrv-cli-root"
 [db.t1]
 name = "Test One"
 data_dir = "$T/t1"
