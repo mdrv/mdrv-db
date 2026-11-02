@@ -4,6 +4,7 @@ description = "mdrv-db: Fjall durability envelope around a SQL data port + conte
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+rust-version.workspace = true
 repository.workspace = true
 readme = "../../README.md"
 keywords = ["database", "sqlite", "fjall", "backup", "wal"]
@@ -27,7 +28,7 @@ turso = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
 axum = { workspace = true }
 tokio-stream = { workspace = true }
-fs2 = { workspace = true }
+fs4 = { workspace = true }
 include_dir = { workspace = true }
 regex = { workspace = true }
 fjall = { workspace = true }

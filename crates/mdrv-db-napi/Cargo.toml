@@ -4,6 +4,7 @@ description = "@mdrv/db — napi-rs v3 binding: mdrv-db engine (fjall envelope) 
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+rust-version.workspace = true
 
 [lib]
 crate-type = ["cdylib"]

@@ -186,7 +186,7 @@ fn disk_guard(j: &Job) -> Option<String> {
     } else {
         j.data_dir.clone()
     };
-    let avail = fs2::available_space(&probe).ok()?;
+    let avail = fs4::available_space(&probe).ok()?;
     if avail < floor {
         Some(format!(
             "insufficient free: {} < {} (min_free)",

@@ -515,8 +515,8 @@ pub(crate) fn serve(opts: Opts) -> Result<(), String> {
         .write(true)
         .open(&lock_path)
         .map_err(|e| format!("cannot open {}: {e}", lock_path.display()))?;
-    use fs2::FileExt;
-    lock.try_lock_exclusive().map_err(|_| {
+    // std file locking (Rust >= 1.89): flock on unix, LockFileEx on windows
+    lock.try_lock().map_err(|_| {
         format!(
             "another mdrv-db daemon is already running (lock {})",
             lock_path.display()
