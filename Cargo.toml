@@ -4,7 +4,7 @@ members = ["crates/mdrv-db", "crates/mdrv-db-napi"]
 
 [workspace.package]
 edition = "2021"
-version = "0.6.2"
+version = "0.6.3"
 license = "MIT"
 rust-version = "1.89"
 repository = "https://github.com/mdrv/mdrv-db"

@@ -10,7 +10,7 @@ rust-version.workspace = true
 crate-type = ["cdylib"]
 
 [dependencies]
-mdrv-db = { path = "../mdrv-db", version = "0.6.2" }
+mdrv-db = { path = "../mdrv-db", version = "0.6.3" }
 blake3 = { workspace = true }
 napi = { workspace = true }
 napi-derive = { workspace = true }
