@@ -393,9 +393,17 @@ pub fn run(
         return ExitCode::from(1);
     }
     let sched: Vec<&Job> = js.iter().filter(|j| j.cron.is_some()).collect();
-    if sched.is_empty() {
-        println!("no [db.*] entries with backup.cron — nothing to schedule");
+    if js.is_empty() {
+        println!(
+            "no [db.*] entries in {} — nothing to serve",
+            cfg_path.display()
+        );
         return ExitCode::SUCCESS;
+    }
+    if sched.is_empty() {
+        println!(
+            "no [db.*.backup] cron entries — serving admin REST/console without scheduled backups"
+        );
     }
     if once {
         let mut errors = 0usize;
@@ -438,7 +446,7 @@ pub fn run(
         port,
         console,
         interval_secs,
-        jobs: sched.into_iter().cloned().collect(),
+        jobs: js,
         data_root,
     }) {
         Ok(()) => ExitCode::SUCCESS,

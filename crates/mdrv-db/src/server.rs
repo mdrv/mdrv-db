@@ -339,18 +339,25 @@ async fn report(
     })
     .await
     .map_err(|e| e.to_string());
+    // spawn_blocking returns join > open_engine > report_export nesting:
+    // open errors live at level 2 (Ok(Err)), export errors at level 3.
     match opened {
         Ok(Ok(Ok(lines))) => {
             Json(json!({"type": "report", "slug": slug, "entries": lines})).into_response()
         }
-        Ok(Ok(Err(e))) => (
+        Ok(Err(e)) => (
             StatusCode::CONFLICT,
-            Json(json!({"error": e.to_string(), "hint": "database in use (owner running?)"})),
+            Json(json!({"error": e, "hint": "database in use (owner running?)"})),
         )
             .into_response(),
-        _ => (
+        Ok(Ok(Err(e))) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"error": "report read failed"})),
+            Json(json!({"error": e.to_string()})),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": format!("report task failed: {e}")})),
         )
             .into_response(),
     }
@@ -375,6 +382,16 @@ async fn backup_now(
         )
             .into_response();
     };
+    if !j.data_dir.join("live").is_dir() || !j.data_dir.join("recovery").is_dir() {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "error": "not an mdrv-db init skeleton (live/ + recovery/ missing)",
+                "hint": "run `mdrv-db init <data_dir>`, or back up this database from its owner process",
+            })),
+        )
+            .into_response();
+    }
     publish_started(&app, &slug);
     let j2 = j.clone();
     let st = tokio::task::spawn_blocking(move || daemon::execute(&j2))
@@ -409,6 +426,16 @@ async fn prune(
         )
             .into_response();
     };
+    if !j.data_dir.join("recovery").is_dir() {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "error": "no recovery/ directory — nothing to prune",
+                "hint": "run `mdrv-db init <data_dir>` first",
+            })),
+        )
+            .into_response();
+    }
     let recovery = j.data_dir.join("recovery");
     let retention = j.retention_days;
     let keep = j.keep;
