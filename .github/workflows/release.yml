@@ -10,6 +10,12 @@ on:
         type: boolean
         default: false
 
+# a release is not a racing event: serialize runs on the same ref and never
+# cancel an in-flight publish halfway through
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: write
 
@@ -130,6 +136,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/setup-bun@v2
+      # the crate embeds crates/mdrv-db/console-dist; fail the release if a
+      # console change was committed without rebuilding the embed (otherwise
+      # crates.io binaries would silently ship a stale console)
+      - name: Console embed freshness
+        run: |
+          (cd packages/console && bun install --frozen-lockfile && bun run build)
+          diff -r packages/console/dist crates/mdrv-db/console-dist
       - uses: dtolnay/rust-toolchain@stable
       # skip when the version is already published (idempotent re-runs);
       # the crates.io API exposes the version as "num" (not "vers")
@@ -191,6 +205,18 @@ jobs:
         with:
           merge-multiple: true
           path: packages/db
+      # only_npm bypasses the tag-triggered version gate; refuse to publish a
+      # version with no matching tag on origin (the idempotency guard below
+      # would otherwise happily push an untagged version live)
+      - name: Guard tag when only_npm
+        if: inputs.only_npm == true
+        run: |
+          V=$(grep -o '"version": "[^"]*"' packages/db/package.json | cut -d'"' -f4)
+          git fetch --quiet origin "refs/tags/v$V" 2>/dev/null || true
+          git rev-parse -q --verify "refs/tags/v$V" >/dev/null || {
+            echo "refusing to publish @mdrv/db@$V: tag v$V not found on origin"
+            exit 1
+          }
       - run: |
           V=$(grep -o '"version": "[^"]*"' package.json | cut -d'"' -f4)
           npm view @mdrv/db@$V version >/dev/null 2>&1 || npm publish --access public
