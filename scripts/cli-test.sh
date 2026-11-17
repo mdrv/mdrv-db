@@ -158,6 +158,12 @@ OUT=$(MDRV_DB_CONFIG=$DCFG $BIN daemon run ghost --once 2>&1); check "unknown sl
 # --- daemon server mode (REST + SSE + console) ---
 # fresh config: [db.bad] from the bad-cron section would abort boot
 cat > "$DCFG" << EOF
+# sched.data_root keeps the single-instance lock inside the fixture;
+# otherwise the daemon flocks the machine-default root and fails when
+# any real mdrv-db daemon is running.
+[sched]
+data_root = "$T/daemon-root"
+
 [db.dtest]
 data_dir = "$T/dtest"
 
