@@ -150,10 +150,11 @@ fn next_after(expr: &str, from: chrono::DateTime<Local>) -> Result<i64, String> 
 }
 
 pub(crate) fn ts(ms: i64) -> String {
-    chrono::DateTime::from_timestamp_millis(ms)
-        .map(|d| {
-            d.with_timezone(&Local)
-                .format("%Y-%m-%d %H:%M:%S")
+    jiff::Timestamp::from_millisecond(ms)
+        .ok()
+        .map(|t| {
+            t.to_zoned_datetime(jiff::tz::TimeZone::system())
+                .strftime("%Y-%m-%d %H:%M:%S")
                 .to_string()
         })
         .unwrap_or_else(|| "?".into())
