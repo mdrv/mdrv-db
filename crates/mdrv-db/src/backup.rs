@@ -19,10 +19,22 @@ pub fn run(engine: &Engine, dest: impl AsRef<Path>) -> Result<BackupOutcome, Mdr
     let dest = dest.as_ref();
     fs::create_dir_all(dest)?;
 
+    // Serialize against the write pipeline (in-process concurrent writers).
+    // Cross-process writers are already excluded by the engine locks: a
+    // daemon-side backup only runs when the owner is stopped.
+    let _write = engine
+        .write_mu
+        .lock()
+        .map_err(|_| MdrvDbError::Usage("engine write lock poisoned".into()))?;
+
     // 1. flush + fsync the envelope
     engine.db.persist(PersistMode::SyncAll)?;
 
-    // 2. turso snapshot (single quotes doubled — VACUUM INTO takes a literal)
+    // 2. capture the ceiling BEFORE the snapshot: everything above it is
+    // not in the backup and must stay replay-able in the primary envelope
+    let ceiling = engine.applied.load(std::sync::atomic::Ordering::SeqCst);
+
+    // 3. turso snapshot (single quotes doubled — VACUUM INTO takes a literal)
     let sql_path = dest.join("app.db");
     let lit = sql_path.display().to_string().replace('\'', "''");
     engine
@@ -30,26 +42,32 @@ pub fn run(engine: &Engine, dest: impl AsRef<Path>) -> Result<BackupOutcome, Mdr
         .exec(&format!("VACUUM INTO '{lit}'"))
         .map_err(MdrvDbError::Port)?;
 
-    // 3. blob tree + fjall dir copies
+    // 4. blob tree + fjall dir copies
     copy_dir(engine.root.join("blobs"), dest.join("blobs"))?;
     copy_dir(engine.root.join("fjall"), dest.join("fjall"))?;
 
-    // 4. manifest
+    // 5. manifest (streamed hashing; blobs may be far larger than RAM)
     let mut files = Vec::new();
     collect_manifest(dest, dest, &mut files)?;
     let manifest = json!({
         "name": engine.name,
-        "applied_lsn": engine.applied.load(std::sync::atomic::Ordering::SeqCst),
+        "applied_lsn": ceiling,
         "created_at": crate::now_ms(),
         "entry_schema": crate::ENTRY_SCHEMA,
         "engine_version": env!("CARGO_PKG_VERSION"),
         "files": files,
     });
     fs::write(dest.join("manifest.json"), manifest.to_string())?;
+
+    // 6. checkpoint to the ceiling — part of the backup cycle so no window
+    // exists where a newer write could be pruned before any artifact
+    // captured it. Only reached once every artifact + manifest landed.
+    let pruned = engine.checkpoint_upto(ceiling, false)?;
+
     engine.report(
         1,
         "backup.run",
-        Some(json!({ "dest": dest.display().to_string() })),
+        Some(json!({ "dest": dest.display().to_string(), "ceiling": ceiling, "checkpointed": pruned })),
     )?;
     Ok(BackupOutcome { manifest })
 }
@@ -76,17 +94,36 @@ fn collect_manifest(root: &Path, dir: &Path, out: &mut Vec<serde_json::Value>) -
         if ft_is_dir(&e)? {
             collect_manifest(root, &e.path(), out)?;
         } else {
-            let bytes = fs::read(e.path())?;
             let rel = e
                 .path()
                 .strip_prefix(root)
                 .unwrap_or(&e.path())
                 .display()
                 .to_string();
-            out.push(json!({ "path": rel, "bytes": bytes.len(), "blake3": hex(&blake3::hash(&bytes).as_bytes()[..16]) }));
+            let (blake, bytes) = blob_digest(&e.path())?;
+            out.push(json!({ "path": rel, "bytes": bytes, "blake3": blake }));
         }
     }
     Ok(())
+}
+
+/// Stream a 1 MiB-at-a-time blake3 so manifest cost is I/O-bound, not
+/// memory-bound (blobs may be far larger than RAM).
+fn blob_digest(path: &Path) -> io::Result<(String, u64)> {
+    use std::io::Read;
+    let mut f = fs::File::open(path)?;
+    let mut h = blake3::Hasher::new();
+    let mut buf = vec![0u8; 1 << 20];
+    let mut n = 0u64;
+    loop {
+        let k = f.read(&mut buf)?;
+        if k == 0 {
+            break;
+        }
+        h.update(&buf[..k]);
+        n += k as u64;
+    }
+    Ok((hex(&h.finalize().as_bytes()[..16]), n))
 }
 
 fn ft_is_dir(e: &fs::DirEntry) -> io::Result<bool> {

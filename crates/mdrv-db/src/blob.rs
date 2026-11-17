@@ -33,12 +33,36 @@ impl BlobStore {
                 .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(b))
     }
 
+    /// Streamed sha256 of a file, 1 MiB at a time (blobs may exceed RAM).
+    /// Returns (hex hash, total bytes read).
+    pub fn hash_file(path: &Path) -> io::Result<(String, u64)> {
+        use std::io::Read;
+        let mut f = fs::File::open(path)?;
+        let mut h = Sha256::new();
+        let mut buf = vec![0u8; 1 << 20];
+        let mut n = 0u64;
+        loop {
+            let k = f.read(&mut buf)?;
+            if k == 0 {
+                break;
+            }
+            h.update(&buf[..k]);
+            n += k as u64;
+        }
+        Ok((hex(&h.finalize()), n))
+    }
+
     pub fn final_path(&self, hash_hex: &str) -> PathBuf {
         self.root.join(&hash_hex[..2]).join(hash_hex)
     }
 
     pub fn staging_path(&self, hash_hex: &str) -> PathBuf {
         self.root.join(".staging").join(hash_hex)
+    }
+
+    /// The staging directory itself (for guarded sweeps).
+    pub fn staging_dir(&self) -> PathBuf {
+        self.root.join(".staging")
     }
 
     /// Write bytes to staging (fsync). If final already exists (dedup),

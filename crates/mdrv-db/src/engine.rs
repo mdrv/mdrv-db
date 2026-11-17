@@ -76,6 +76,9 @@ pub struct RecoveryReport {
     pub skipped_pending: u64,
     pub skipped_aborted: u64,
     pub wall_ms: i64,
+    /// lifecycle records finished by this open (crash between apply and mark)
+    #[serde(default)]
+    pub completed: u64,
 }
 
 pub struct Engine {
@@ -93,6 +96,11 @@ pub struct Engine {
     pub(crate) applied: AtomicU64,
     pub(crate) report_seq: AtomicU64,
     idem_sweeps: AtomicU64,
+    upload_seq: AtomicU64,
+    /// Serializes the journal -> apply -> mark pipeline. `execute` takes
+    /// `&self`, so cross-thread callers would otherwise race the
+    /// read-modify-use LSN allocation into duplicate WAL keys.
+    pub(crate) write_mu: std::sync::Mutex<()>,
     pub(crate) open: bool,
 }
 
@@ -169,11 +177,13 @@ impl Engine {
             applied: AtomicU64::new(applied),
             report_seq: AtomicU64::new(0),
             idem_sweeps: AtomicU64::new(0),
+            upload_seq: AtomicU64::new(0),
+            write_mu: std::sync::Mutex::new(()),
             open: true,
         };
 
-        engine.blobs.sweep_staging();
         let rec = engine.recover()?;
+        engine.sweep_staging_guarded();
         engine.report(
             1,
             "engine.open",
@@ -190,11 +200,20 @@ impl Engine {
             return Err(MdrvDbError::Usage("empty ops".into()));
         }
 
+        // Serialize the journal -> apply -> mark pipeline (see write_mu).
+        let _write = self
+            .write_mu
+            .lock()
+            .map_err(|_| MdrvDbError::Usage("engine write lock poisoned".into()))?;
+
         // idempotency replay
         if let Some(key) = &req.idem_key {
             if let Some(v) = self.idem.get(key.as_bytes())? {
                 if v.first() == Some(&2u8) {
-                    // Completed: {2, ts_ms be u64, response str}
+                    // Completed: {2, lsn be u64, ts_ms be u64, response str}
+                    if v.len() < 17 {
+                        return Err(MdrvDbError::Corrupt("truncated idem record".into()));
+                    }
                     let resp = String::from_utf8_lossy(&v[17..]).into_owned();
                     return Ok(ExecuteOutcome {
                         lsn: u64::from_be_bytes(v[1..9].try_into().unwrap_or([0; 8])),
@@ -206,11 +225,20 @@ impl Engine {
             }
         }
 
-        // stage blobs (fsync) BEFORE journaling the intent
+        // validate + stage blobs (fsync) BEFORE journaling the intent
         for op in &req.ops {
-            if let Op::BlobPut { hash_hex } = op {
-                // bytes were staged via put_blob(); nothing to do here —
-                // the staging file IS the durable pre-commit copy.
+            let hash_hex = match op {
+                Op::BlobPut { hash_hex } | Op::BlobDrop { hash_hex } => hash_hex,
+                _ => continue,
+            };
+            if !BlobStore::valid_hash(hash_hex) {
+                return Err(MdrvDbError::Usage(format!(
+                    "invalid blob hash {hash_hex:?}"
+                )));
+            }
+            // bytes were staged via put_blob(); nothing to do here —
+            // the staging file IS the durable pre-commit copy.
+            if let Op::BlobPut { .. } = op {
                 if !self.blobs.staging_path(hash_hex).is_file()
                     && !self.blobs.final_path(hash_hex).is_file()
                 {
@@ -278,6 +306,13 @@ impl Engine {
                 }
                 b.commit()?;
                 self.applied.store(lsn, Ordering::SeqCst);
+                // 5b. committed BlobDrops delete only here — the abort path
+                // must never destroy content an idempotent retry needs.
+                for op in &entry.ops {
+                    if let Op::BlobDrop { hash_hex } = op {
+                        let _ = self.blobs.drop_blob(hash_hex);
+                    }
+                }
                 // 6. opportunistic idempotency-cache expiry (bounded, sampled)
                 if self.idem_sweeps.fetch_add(1, Ordering::SeqCst) & IDEM_SWEEP_MASK == 0 {
                     self.idem_sweep(now_ms(), lsn);
@@ -297,11 +332,8 @@ impl Engine {
                 mark_aborted.extend_from_slice(&hash8.as_bytes()[..8]);
                 b.insert(&self.marks, lsn.to_be_bytes(), mark_aborted.as_slice());
                 b.commit()?;
-                for op in &entry.ops {
-                    if let Op::BlobDrop { hash_hex } = op {
-                        let _ = self.blobs.drop_blob(hash_hex);
-                    }
-                }
+                // aborted ops never replay; their staged blobs stay for the
+                // guarded staging sweep (delete-on-abort destroyed data).
                 Err(e)
             }
         }
@@ -352,12 +384,13 @@ impl Engine {
     /// verify, and removed with `BlobDrop`.
     pub fn blob_upload_begin(&self) -> Result<BlobUpload, MdrvDbError> {
         let id = format!(
-            "{}-{}",
+            "{}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.subsec_nanos())
-                .unwrap_or(0)
+                .unwrap_or(0),
+            self.upload_seq.fetch_add(1, Ordering::SeqCst)
         );
         self.blobs.upload_begin(&id).map_err(MdrvDbError::from)
     }
@@ -369,6 +402,9 @@ impl Engine {
 
     /// Final (committed) blob path by hash, if present.
     pub fn blob_path(&self, hash_hex: &str) -> Option<std::path::PathBuf> {
+        if !BlobStore::valid_hash(hash_hex) {
+            return None;
+        }
         let p = self.blobs.final_path(hash_hex);
         p.is_file().then_some(p)
     }
@@ -486,9 +522,11 @@ impl Engine {
         let started = std::time::Instant::now();
         let applied_before = self.applied.load(Ordering::SeqCst);
         let from = applied_before.saturating_add(1);
-        let (mut replayed, mut pending, mut aborted) = (0u64, 0u64, 0u64);
+        let (mut replayed, mut pending, mut aborted, mut completed) = (0u64, 0u64, 0u64, 0u64);
 
-        // collect committed entries above the watermark
+        // collect committed + journaled intents above the watermark; replay
+        // both (a PENDING entry above the watermark never reached the port,
+        // so applying it is safe and closes the silent-pending-forever hole)
         let mut batch: Vec<TxEntry> = Vec::new();
         for kv in self.wal.range(from.to_be_bytes()..=u64::MAX.to_be_bytes()) {
             let (k, v) = kv.into_inner()?;
@@ -496,11 +534,13 @@ impl Engine {
             let mark = self.marks.get(&k)?;
             let status = mark.as_ref().and_then(|m| m.first().copied()).unwrap_or(0);
             match status {
-                MARK_COMMITTED => {
+                MARK_COMMITTED | MARK_PENDING => {
                     let entry: TxEntry = postcard::from_bytes(&v)?;
                     batch.push(entry);
+                    if status == MARK_PENDING {
+                        pending += 1;
+                    }
                 }
-                MARK_PENDING => pending += 1, // applied-or-not; port watermark decides
                 MARK_ABORTED => aborted += 1,
                 _ => {
                     return Err(MdrvDbError::Corrupt(format!(
@@ -508,6 +548,30 @@ impl Engine {
                     )));
                 }
             }
+        }
+
+        // finish entries the port already applied but whose lifecycle
+        // records the crash cut short (mark + idem + blob promotion)
+        for kv in self.wal.range(..=applied_before.to_be_bytes()) {
+            let (k, v) = kv.into_inner()?;
+            let mark = self.marks.get(&k)?;
+            if mark.as_ref().and_then(|m| m.first()) != Some(&MARK_PENDING) {
+                continue;
+            }
+            let entry: TxEntry = postcard::from_bytes(&v)?;
+            let hash8 = mark.as_ref().map(|m| m[1..].to_vec()).unwrap_or_default();
+            let mut b = self.db.batch();
+            let mut mark_committed = Vec::with_capacity(MARK_LEN);
+            mark_committed.push(MARK_COMMITTED);
+            mark_committed.extend_from_slice(&hash8);
+            b.insert(&self.marks, k.as_slice(), mark_committed.as_slice());
+            b.commit()?;
+            for op in &entry.ops {
+                if let Op::BlobPut { hash_hex } = op {
+                    self.blobs.promote(hash_hex)?;
+                }
+            }
+            completed += 1;
         }
 
         // replay in LSN order, grouped transactions
@@ -519,13 +583,43 @@ impl Engine {
             replayed += group.len() as u64;
         }
         // keep fjall mirror in sync (info only)
+        let applied_after = self.applied.load(Ordering::SeqCst);
         let mut b = self.db.batch();
-        b.insert(
-            &self.meta,
-            META_APPLIED,
-            self.applied.load(Ordering::SeqCst).to_string(),
-        );
+        b.insert(&self.meta, META_APPLIED, applied_after.to_string());
         b.commit()?;
+
+        // finish idempotency records left in Processing by the crash
+        // window: commit-side records become Completed, aborted ones become
+        // terminal-Aborted (state 3) so a retry re-executes but recovery
+        // stops re-deciding their fate on every open.
+        let mut b2 = self.db.batch();
+        for kv in self.idem.range::<Vec<u8>, _>(..) {
+            let (k, v) = kv.into_inner()?;
+            if v.first() != Some(&1u8) {
+                continue;
+            }
+            if v.len() < 17 {
+                // corrupt junk: weak-delete, consumed-once garbage
+                b2.remove_weak(&self.idem, k.as_slice());
+                continue;
+            }
+            let lsn = u64::from_be_bytes(v[1..9].try_into().expect("8-byte slice"));
+            let fate = self
+                .marks
+                .get(lsn.to_be_bytes())?
+                .and_then(|m| m.first().copied());
+            let state = match fate {
+                Some(MARK_ABORTED) => 3u8,
+                _ => 2u8,
+            };
+            if lsn <= applied_after || state == 3 {
+                let mut rec = vec![state];
+                rec.extend_from_slice(&lsn.to_be_bytes());
+                rec.extend_from_slice(&now_ms().to_be_bytes());
+                b2.insert(&self.idem, k.as_slice(), rec.as_slice());
+            }
+        }
+        b2.commit()?;
 
         Ok(RecoveryReport {
             applied_before,
@@ -533,7 +627,51 @@ impl Engine {
             skipped_pending: pending,
             skipped_aborted: aborted,
             wall_ms: started.elapsed().as_millis() as i64,
+            completed,
         })
+    }
+
+    /// Remove staging leftovers no live WAL entry references and older than
+    /// an hour. Runs AFTER recover() (which promotes referenced copies) so a
+    /// crash in the apply -> promote gap cannot lose the only durable copy.
+    fn sweep_staging_guarded(&self) {
+        let mut referenced: std::collections::HashSet<String> = Default::default();
+        for kv in self.wal.range::<[u8; 8], _>(..) {
+            let Ok((_, v)) = kv.into_inner() else {
+                continue;
+            };
+            if let Ok(entry) = postcard::from_bytes::<TxEntry>(&v) {
+                for op in &entry.ops {
+                    if let Op::BlobPut { hash_hex } = op {
+                        referenced.insert(hash_hex.clone());
+                    }
+                }
+            }
+        }
+        const STAGING_KEEP_MS: i64 = 60 * 60 * 1000;
+        let cutoff = now_ms() - STAGING_KEEP_MS;
+        let Ok(rd) = std::fs::read_dir(self.blobs.staging_dir()) else {
+            return;
+        };
+        for e in rd.flatten() {
+            let name = e.file_name().to_string_lossy().into_owned();
+            if referenced.contains(&name) {
+                continue;
+            }
+            // mtime older than the cutoff: not referenced by any WAL entry
+            // and past the crash-window grace period — safe to remove.
+            let stale = e
+                .metadata()
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_millis() as i64)
+                .map(|ms| ms <= cutoff)
+                .unwrap_or(false);
+            if stale {
+                let _ = std::fs::remove_file(e.path());
+            }
+        }
     }
 
     fn apply_group(&self, group: &[TxEntry]) -> Result<(), MdrvDbError> {
@@ -578,21 +716,31 @@ impl Engine {
     /// successful backup of turso+blobs (see backup::run).
     pub fn checkpoint(&self, compact: bool) -> Result<u64, MdrvDbError> {
         let applied = self.applied.load(Ordering::SeqCst);
-        if applied == 0 {
+        self.checkpoint_upto(applied, compact)
+    }
+
+    /// Prune WAL+marks up to `min(max_lsn, live watermark)`. Backup flows
+    /// pass the LSN their artifacts actually captured so a concurrent
+    /// writer's newer entries stay replay-able from the primary envelope.
+    /// Safe against concurrent execute(): pruned keys are strictly below
+    /// any LSN a racing writer can allocate past `upto`.
+    pub fn checkpoint_upto(&self, max_lsn: u64, compact: bool) -> Result<u64, MdrvDbError> {
+        let upto = self.applied.load(Ordering::SeqCst).min(max_lsn);
+        if upto == 0 {
             return Ok(0);
         }
         let mut b = self.db.batch();
-        for kv in self.wal.range(..=applied.to_be_bytes()) {
+        for kv in self.wal.range(..=upto.to_be_bytes()) {
             let (k, _) = kv.into_inner()?;
             b.remove_weak(&self.wal, k.as_slice());
             b.remove_weak(&self.marks, k.as_slice());
         }
-        b.insert(&self.meta, META_CHECKPOINT, applied.to_string());
+        b.insert(&self.meta, META_CHECKPOINT, upto.to_string());
         b.commit()?;
         if compact {
             self.wal.major_compact()?;
         }
-        Ok(applied)
+        Ok(upto)
     }
 
     // -- report ---------------------------------------------------------------
@@ -624,6 +772,7 @@ impl Engine {
         since_ms: i64,
         limit: usize,
     ) -> Result<Vec<serde_json::Value>, MdrvDbError> {
+        let since_ms = since_ms.max(0); // negatives sort above real keys
         let mut from = [0u8; 16];
         from[..8].copy_from_slice(&since_ms.to_be_bytes());
         let mut out = Vec::new();
@@ -759,6 +908,11 @@ fn read_applied(port: &dyn DataPort) -> Result<u64, MdrvDbError> {
         Some(PortValue::Text(s)) => s
             .parse()
             .map_err(|_| MdrvDbError::Corrupt("bad applied_lsn".into())),
-        _ => Ok(0),
+        Some(other) => Err(MdrvDbError::Corrupt(format!(
+            "applied_lsn is not text: {other:?}"
+        ))),
+        None => Err(MdrvDbError::Corrupt(
+            "applied_lsn row missing — envelope tampered?".into(),
+        )),
     }
 }

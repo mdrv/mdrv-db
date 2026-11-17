@@ -41,7 +41,14 @@ fn resolve_name(data_dir: &std::path::Path, name: &Option<String>) -> String {
 /// (read-only, no port). Returns None when there is no envelope yet.
 fn read_meta_name(data_dir: &std::path::Path) -> Option<String> {
     let root = mdrv_db::live_dir(data_dir);
-    let db = fjall::Database::builder(root.join("fjall")).open().ok()?;
+    let fjall_dir = root.join("fjall");
+    // Database::builder().open() is create-or-recover: probing a typo'd or
+    // un-initialized dir would silently materialize an envelope. Only read
+    // when the envelope already exists.
+    if !fjall_dir.is_dir() {
+        return None;
+    }
+    let db = fjall::Database::builder(&fjall_dir).open().ok()?;
     let meta = db
         .keyspace("meta", fjall::KeyspaceCreateOptions::default)
         .ok()?;
@@ -101,6 +108,15 @@ fn restore_copy(backup_dir: &std::path::Path, data_dir: &std::path::Path) -> Res
     if data_dir.join("live").join("fjall").exists() {
         return Err(format!(
             "{:?} already has live/fjall — refusing to overwrite; clear it first",
+            data_dir
+        ));
+    }
+    if data_dir.join("fjall").exists() {
+        // flat (root-level) envelope: restoring into live/ would shadow it
+        return Err(format!(
+            "{:?} is a flat-layout envelope (fjall/ at the root) — move or \
+             clear its root-level app.db + blobs/ + fjall/ before restoring \
+             into live/",
             data_dir
         ));
     }

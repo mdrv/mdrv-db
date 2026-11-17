@@ -2,7 +2,7 @@
 //! port integrity_check. Runs after any restore, on a schedule, on demand.
 
 use crate::engine::Engine;
-use crate::entry::{TxEntry, MARK_ABORTED, MARK_COMMITTED, MARK_PENDING};
+use crate::entry::{Op, TxEntry, MARK_ABORTED, MARK_COMMITTED, MARK_PENDING};
 use crate::MdrvDbError;
 use serde_json::json;
 
@@ -10,6 +10,10 @@ pub fn run(engine: &Engine) -> Result<serde_json::Value, MdrvDbError> {
     let mut anomalies: Vec<String> = Vec::new();
     let mut wal_entries = 0u64;
     let mut checked = 0u64;
+    // blobs a live WAL entry references (checkpoint prunes applied entries,
+    // so this covers everything not yet checkpointed away)
+    let mut referenced: std::collections::HashSet<String> = Default::default();
+    let mut dropped: std::collections::HashSet<String> = Default::default();
 
     // 1. envelope: every wal entry's blake3 must match its mark
     for kv in engine
@@ -33,22 +37,46 @@ pub fn run(engine: &Engine) -> Result<serde_json::Value, MdrvDbError> {
             anomalies.push(format!("lsn {lsn}: entry hash mismatch (tamper/rot)"));
             continue;
         }
-        // decode sanity for committed entries
-        if mark[0] == MARK_COMMITTED && postcard::from_bytes::<TxEntry>(&v).is_err() {
-            anomalies.push(format!("lsn {lsn}: committed entry undecodable"));
+        // decode sanity + live blob references for committed entries
+        if mark[0] == MARK_COMMITTED {
+            match postcard::from_bytes::<TxEntry>(&v) {
+                Ok(entry) => {
+                    for op in &entry.ops {
+                        match op {
+                            Op::BlobPut { hash_hex } => {
+                                referenced.insert(hash_hex.clone());
+                            }
+                            Op::BlobDrop { hash_hex } => {
+                                dropped.insert(hash_hex.clone());
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                Err(_) => anomalies.push(format!("lsn {lsn}: committed entry undecodable")),
+            }
         }
         checked += 1;
     }
 
-    // 2. blobs: sha256(file) == filename; orphans reported, not deleted
+    // 2. blobs: sha256(file) == filename (streamed); orphans reported, not
+    // deleted; WAL-referenced blobs must exist
     let mut blob_files = 0u64;
     let mut blob_bytes = 0u64;
     for (hash_hex, path) in engine.blobs.walk_final()? {
-        let bytes = std::fs::read(&path)?;
         blob_files += 1;
-        blob_bytes += bytes.len() as u64;
-        if crate::blob::BlobStore::hash(&bytes) != hash_hex {
+        let (got, n) = crate::blob::BlobStore::hash_file(&path)?;
+        blob_bytes += n;
+        if got != hash_hex {
             anomalies.push(format!("blob {hash_hex}: content hash mismatch"));
+        }
+    }
+    for hash_hex in &referenced {
+        if dropped.contains(hash_hex) {
+            continue;
+        }
+        if !engine.blobs.final_path(hash_hex).is_file() {
+            anomalies.push(format!("wal-referenced blob missing: {hash_hex}"));
         }
     }
 
