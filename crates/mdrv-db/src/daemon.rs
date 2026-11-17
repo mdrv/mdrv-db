@@ -160,14 +160,16 @@ pub(crate) fn ts(ms: i64) -> String {
         .unwrap_or_else(|| "?".into())
 }
 
-/// Backup dirs are `<ms>-offline` / `<ms>-daemon`; the leading digits are
-/// the creation timestamp.
+/// Backup dirs are `<ms>-offline` / `<ms>-daemon` / `<ms>-migrate`; the
+/// leading digits are the creation timestamp. The suffix is whitelisted so
+/// a user directory like `123-notes/` is never counted as a backup.
 pub(crate) fn backup_ts(name: &str) -> Option<i64> {
     let digits: String = name.chars().take_while(|c| c.is_ascii_digit()).collect();
     if digits.is_empty() || digits.len() == name.len() {
         return None;
     }
-    if !name[digits.len()..].starts_with('-') {
+    let suffix = &name[digits.len()..];
+    if !matches!(suffix, "-offline" | "-daemon" | "-migrate") {
         return None;
     }
     digits.parse().ok()
@@ -203,6 +205,9 @@ fn fmt_bytes(n: u64) -> String {
 
 /// Pre-flight disk guard (daemon-managed jobs only): free space on the
 /// volume holding `recovery/` must be >= floor, else the job is skipped.
+/// A failed space probe skips the job too — running a backup without
+/// knowing the free space is how disks fill silently. `min_free = 0`
+/// disables the guard entirely (probe included).
 fn disk_guard(j: &Job) -> Option<String> {
     let floor = j.min_free.unwrap_or(DEFAULT_MIN_FREE);
     if floor == 0 {
@@ -214,7 +219,9 @@ fn disk_guard(j: &Job) -> Option<String> {
     } else {
         j.data_dir.clone()
     };
-    let avail = fs4::available_space(&probe).ok()?;
+    let avail = fs4::available_space(&probe)
+        .map_err(|e| format!("cannot probe free space of {}: {e}", probe.display()))
+        .ok()?;
     if avail < floor {
         Some(format!(
             "insufficient free: {} < {} (min_free)",
@@ -316,8 +323,10 @@ fn run_job(j: &Job) -> JobOut {
         .and_then(|v| {
             if v.get("ok").and_then(|x| x.as_bool()).unwrap_or(false) {
                 let l = lsn.map(|x| x.to_string()).unwrap_or_else(|| "?".into());
+                // backup::run already checkpointed to its ceiling; this is a
+                // ceiling-honoring no-op kept as belt-and-braces
                 engine
-                    .checkpoint(false)
+                    .checkpoint_upto(lsn.map(|x| x as u64).unwrap_or(0), false)
                     .map_err(|e| e.to_string())
                     .map(|n| format!("backup → {dest_str} (lsn {l}, verified, checkpoint {n})"))
             } else {
@@ -606,5 +615,22 @@ pub fn install() -> ExitCode {
             eprintln!("cannot write {path:?}: {e}");
             ExitCode::from(1)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn backup_ts_accepts_only_backup_suffixes() {
+        assert_eq!(backup_ts("1730000000000-daemon"), Some(1730000000000));
+        assert_eq!(backup_ts("1730000000000-offline"), Some(1730000000000));
+        assert_eq!(backup_ts("1730000000000-migrate"), Some(1730000000000));
+        // user dirs that merely start with digits must never count
+        assert_eq!(backup_ts("123-notes"), None);
+        assert_eq!(backup_ts("999"), None);
+        assert_eq!(backup_ts("not-a-backup"), None);
+        assert_eq!(backup_ts("123-backup"), None);
     }
 }

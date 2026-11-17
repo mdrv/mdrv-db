@@ -42,9 +42,32 @@ pub(crate) struct App {
     sessions: Mutex<HashSet<String>>,
     events: tokio::sync::broadcast::Sender<String>,
     states: Mutex<HashMap<String, JobState>>,
+    /// slugs with an in-flight scheduled job (prevents re-fire every tick
+    /// while the blocking job runs)
+    running: Mutex<HashSet<String>>,
     console: Option<PathBuf>,
     #[allow(dead_code)]
     lock: std::fs::File,
+}
+
+/// Slugs whose cron job should run now: cron'd, not already in flight, and
+/// either never run under this daemon (first-run bootstrap — a missing
+/// state must not silence a job forever) or past its next_run_ms.
+fn due_jobs(
+    jobs: &[Job],
+    states: &HashMap<String, JobState>,
+    running: &HashSet<String>,
+    now: i64,
+) -> Vec<Job> {
+    jobs.iter()
+        .filter(|j| j.cron.is_some())
+        .filter(|j| !running.contains(&j.slug))
+        .filter(|j| match states.get(&j.slug) {
+            Some(s) => now >= s.next_run_ms,
+            None => true,
+        })
+        .cloned()
+        .collect()
 }
 
 fn urandom_hex(n: usize) -> String {
@@ -69,8 +92,12 @@ fn cookie_of(headers: &HeaderMap) -> Option<String> {
     let raw = headers.get(header::COOKIE)?.to_str().ok()?;
     for part in raw.split(';') {
         let part = part.trim();
-        if let Some(v) = part.strip_prefix(COOKIE) {
-            return v.strip_prefix('=').map(|s| s.to_string());
+        // exact name match: a prefix strip would let `mdrv_db_session2`
+        // (or an attacker-chosen lookalike) satisfy the auth check
+        if let Some((name, v)) = part.split_once('=') {
+            if name == COOKIE {
+                return Some(v.to_string());
+            }
         }
     }
     None
@@ -95,12 +122,22 @@ fn content_type(p: &str) -> &'static str {
     }
 }
 
+/// Resolve a console-relative path inside the `--console` override dir.
+/// Both sides are canonicalized: a lexical `starts_with` is defeated by
+/// dot-segment requests (`--path-as-is /../../etc/passwd`) that resolve
+/// outside the served directory. Returns None unless the file exists
+/// inside the dir after symlink/dot-segment resolution.
+fn safe_console_path(dir: &std::path::Path, rel: &str) -> Option<std::path::PathBuf> {
+    let canon_dir = std::fs::canonicalize(dir).ok()?;
+    let p = std::fs::canonicalize(dir.join(rel)).ok()?;
+    (p.is_file() && p.starts_with(&canon_dir)).then_some(p)
+}
+
 async fn console_asset(app: Arc<App>, path: &str) -> Response {
     let rel = path.trim_start_matches('/');
     let rel = if rel.is_empty() { "index.html" } else { rel };
     if let Some(dir) = &app.console {
-        let p = dir.join(rel);
-        if p.is_file() && p.starts_with(dir) {
+        if let Some(p) = safe_console_path(dir, rel) {
             if let Ok(bytes) = std::fs::read(&p) {
                 return (
                     StatusCode::OK,
@@ -408,7 +445,7 @@ async fn backup_now(
             return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))).into_response()
         }
     };
-    publish(app.clone(), &st);
+    publish(&app, &st);
     Json(json!({"type": "job.finished", "state": st})).into_response()
 }
 
@@ -672,7 +709,7 @@ fn publish_started(app: &Arc<App>, slug: &str) {
         .send(json!({"type": "job.started", "slug": slug, "ts_ms": mdrv_db::now_ms()}).to_string());
 }
 
-fn publish(app: Arc<App>, st: &JobState) {
+fn publish(app: &Arc<App>, st: &JobState) {
     if let Ok(mut m) = app.states.lock() {
         m.insert(st.slug.clone(), st.clone());
     }
@@ -688,7 +725,7 @@ fn publish(app: Arc<App>, st: &JobState) {
         })
         .to_string(),
     );
-    let _ = app.events.send(snapshot(&app).to_string());
+    let _ = app.events.send(snapshot(app).to_string());
 }
 
 async fn events(AxState(app): AxState<Arc<App>>, headers: HeaderMap) -> Response {
@@ -701,9 +738,14 @@ async fn events(AxState(app): AxState<Arc<App>>, headers: HeaderMap) -> Response
     }
     let rx = app.events.subscribe();
     let first = Event::default().data(snapshot(&app).to_string());
-    let stream = BroadcastStream::new(rx).filter_map(|x| match x {
+    let app2 = app.clone();
+    let stream = BroadcastStream::new(rx).filter_map(move |x| match x {
         Ok(data) => Some(Ok(Event::default().data(data))),
-        Err(_) => None,
+        Err(_) => {
+            // the only recv error is Lagged: resync with a full snapshot so
+            // the client cannot silently keep a stale fleet view
+            Some(Ok(Event::default().data(snapshot(&app2).to_string())))
+        }
     });
     let hb = IntervalStream::new(tokio::time::interval(std::time::Duration::from_secs(15)))
         .map(|_| Ok::<_, std::convert::Infallible>(Event::default().comment("ping")));
@@ -773,6 +815,7 @@ pub(crate) fn serve(opts: Opts) -> Result<(), String> {
         sessions: Mutex::new(HashSet::new()),
         events: tx,
         states,
+        running: Mutex::new(HashSet::new()),
         console: opts.console.clone(),
         lock,
     });
@@ -796,38 +839,48 @@ pub(crate) fn serve(opts: Opts) -> Result<(), String> {
                         Ok(m) => m,
                         Err(_) => continue,
                     };
+                    let running = match sched_app.running.lock() {
+                        Ok(m) => m,
+                        Err(_) => continue,
+                    };
                     let jobs = match sched_app.jobs.read() {
                         Ok(g) => g.clone(),
                         Err(_) => continue,
                     };
-                    jobs
-                        .iter()
-                        .filter(|j| j.cron.is_some())
-                        .filter(|j| {
-                            states
-                                .get(&j.slug)
-                                .map(|s| mdrv_db::now_ms() >= s.next_run_ms)
-                                .unwrap_or(false)
-                        })
-                        .cloned()
-                        .collect()
+                    due_jobs(&jobs, &states, &running, mdrv_db::now_ms())
                 };
                 for j in due {
+                    if let Ok(mut m) = sched_app.running.lock() {
+                        m.insert(j.slug.clone());
+                    }
                     publish_started(&sched_app, &j.slug);
                     let app2 = sched_app.clone();
+                    let slug = j.slug.clone();
                     tokio::spawn(async move {
-                        let st = tokio::task::spawn_blocking(move || daemon::execute(&j))
-                            .await
-                            .ok();
-                        if let Some(st) = st {
-                            println!(
-                                "{} [{}] {} {}",
-                                daemon::ts(st.last_run_ms),
-                                st.slug,
-                                st.last_result,
-                                st.detail
-                            );
-                            publish(app2, &st);
+                        let st = tokio::task::spawn_blocking(move || daemon::execute(&j)).await;
+                        match st {
+                            Ok(st) => {
+                                println!(
+                                    "{} [{}] {} {}",
+                                    daemon::ts(st.last_run_ms),
+                                    st.slug,
+                                    st.last_result,
+                                    st.detail
+                                );
+                                publish(&app2, &st);
+                            }
+                            Err(e) => {
+                                // task panicked or was cancelled: log it and
+                                // clear the in-flight marker so the next
+                                // tick retries instead of stalling forever
+                                eprintln!(
+                                    "{} [{slug}] job task failed: {e}",
+                                    daemon::ts(mdrv_db::now_ms())
+                                );
+                            }
+                        }
+                        if let Ok(mut m) = app2.running.lock() {
+                            m.remove(&slug);
                         }
                     });
                 }
@@ -865,4 +918,101 @@ pub(crate) fn serve(opts: Opts) -> Result<(), String> {
             .map_err(|e| format!("serve: {e}"))
     })?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn job(slug: &str, cron: Option<&str>) -> Job {
+        Job {
+            slug: slug.into(),
+            data_dir: PathBuf::from("/tmp"),
+            name: None,
+            cron: cron.map(|s| s.to_string()),
+            retention_days: None,
+            keep: None,
+            min_free: None,
+            title: None,
+            description: None,
+            labels: None,
+            order: None,
+        }
+    }
+
+    #[test]
+    fn due_jobs_bootstraps_and_skips_inflight() {
+        let jobs = vec![
+            job("a", Some("0 3 * * *")),
+            job("b", None),
+            job("c", Some("0 4 * * *")),
+        ];
+        // no state at all: cron'd slugs are due (first-run bootstrap)
+        let due = due_jobs(&jobs, &HashMap::new(), &HashSet::new(), 0);
+        assert_eq!(
+            due.iter().map(|j| j.slug.as_str()).collect::<Vec<_>>(),
+            ["a", "c"]
+        );
+        // stale next_run_ms -> due
+        let mut states = HashMap::new();
+        states.insert(
+            "a".to_string(),
+            JobState {
+                slug: "a".into(),
+                last_run_ms: 0,
+                last_result: "ok".into(),
+                detail: String::new(),
+                next_run_ms: 5,
+                last_backup: None,
+                applied_lsn: None,
+            },
+        );
+        let due = due_jobs(&jobs, &states, &HashSet::new(), 10);
+        assert_eq!(
+            due.iter().map(|j| j.slug.as_str()).collect::<Vec<_>>(),
+            ["a", "c"]
+        );
+        // future next_run_ms -> not due
+        let mut states2 = states.clone();
+        states2.get_mut("a").unwrap().next_run_ms = 100;
+        let due = due_jobs(&jobs, &states2, &HashSet::new(), 10);
+        assert_eq!(
+            due.iter().map(|j| j.slug.as_str()).collect::<Vec<_>>(),
+            ["c"]
+        );
+        // in-flight marker silences an otherwise-due job
+        let mut running = HashSet::new();
+        running.insert("c".to_string());
+        let due = due_jobs(&jobs, &states2, &running, 10);
+        assert!(due.is_empty());
+    }
+
+    #[test]
+    fn cookie_of_matches_exact_name() {
+        let mut h = HeaderMap::new();
+        h.insert(
+            header::COOKIE,
+            header::HeaderValue::from_static(
+                "mdrv_db_session2=evil; other=1; mdrv_db_session=real",
+            ),
+        );
+        assert_eq!(cookie_of(&h).as_deref(), Some("real"));
+        let mut h2 = HeaderMap::new();
+        h2.insert(header::COOKIE, header::HeaderValue::from_static("x=1"));
+        assert_eq!(cookie_of(&h2), None);
+    }
+
+    #[test]
+    fn safe_console_path_blocks_dot_segment_escape() {
+        let dir = std::env::temp_dir().join(format!("mdrv-console-{}", std::process::id()));
+        let sub = dir.join("sub");
+        std::fs::create_dir_all(&sub).expect("mkdir");
+        std::fs::write(sub.join("a.html"), "x").expect("write");
+        // inside: ok
+        assert!(safe_console_path(&dir, "sub/a.html").is_some());
+        // dot segments resolving outside: blocked
+        assert!(safe_console_path(&dir, "../mdrv-console-x/secret").is_none());
+        assert!(safe_console_path(&dir, "sub/../../../etc/passwd").is_none());
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }

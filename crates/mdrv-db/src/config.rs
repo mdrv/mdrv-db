@@ -204,22 +204,8 @@ fn set_prop(path: &Path, expr: &str) -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    let text = match std::fs::read_to_string(path) {
-        Ok(t) => t,
-        Err(e) => {
-            eprintln!("cannot read {}: {e}", path.display());
-            return ExitCode::from(1);
-        }
-    };
-    let out = match apply_set(&text, key, val) {
-        Ok(o) => o,
-        Err(e) => {
-            eprintln!("{e}");
-            return ExitCode::from(1);
-        }
-    };
-    if let Err(e) = std::fs::write(path, out) {
-        eprintln!("cannot write {}: {e}", path.display());
+    if let Err(e) = crate::config::write_locked(path, |text| apply_set(text, key, val)) {
+        eprintln!("{e}");
         return ExitCode::from(1);
     }
     println!("{key} = {val}");
@@ -277,30 +263,67 @@ fn parse_value(val: &str) -> toml_edit::Item {
 
 /// Rewrite the per-slug display rank (`order = N`) for a whole fleet.
 /// `ranks` maps slug -> position; missing slug tables are created.
-pub fn set_slug_orders(path: &Path, ranks: &[(String, i64)]) -> Result<(), String> {
-    let text = std::fs::read_to_string(path)
-        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-    let mut doc: toml_edit::DocumentMut = text
-        .parse()
-        .map_err(|e| format!("TOML parse error in {}: {e}", path.display()))?;
-    let db = doc
-        .as_table_mut()
-        .entry("db")
-        .or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
-    let Some(db) = db.as_table_mut() else {
-        return Err("[db] is not a table".into());
-    };
-    for (slug, rank) in ranks {
-        let item = db
-            .entry(slug.as_str())
-            .or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
-        let Some(t) = item.as_table_mut() else {
-            return Err(format!("[db.{slug}] is not a table"));
-        };
-        t.insert("order", toml_edit::Item::Value((*rank).into()));
+/// Serialize config-file writes. The CLI (`config --set`) and the console
+/// (meta/order PATCHes) can mutate the same file concurrently — without a
+/// lock, whole-document read-modify-write loses updates. Takes an flock on
+/// `<path>.lock`, re-reads the current text under the lock, lets `f` produce
+/// the new text, then replaces the file atomically (temp + rename) so a
+/// crash mid-write cannot leave a truncated config.
+pub(crate) fn write_locked(
+    path: &Path,
+    f: impl FnOnce(&str) -> Result<String, String>,
+) -> Result<(), String> {
+    let lock_path = PathBuf::from(format!("{}.lock", path.display()));
+    if let Some(parent) = lock_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
     }
-    std::fs::write(path, doc.to_string())
-        .map_err(|e| format!("cannot write {}: {e}", path.display()))
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&lock_path)
+        .map_err(|e| format!("cannot open {}: {e}", lock_path.display()))?;
+    // std file locking (Rust >= 1.89)
+    file.try_lock()
+        .map_err(|_| format!("another writer holds {}", lock_path.display()))?;
+    let res = (|| {
+        let text = std::fs::read_to_string(path)
+            .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+        let out = f(&text)?;
+        let tmp = PathBuf::from(format!("{}.tmp", path.display()));
+        std::fs::write(&tmp, out).map_err(|e| format!("cannot write {}: {e}", tmp.display()))?;
+        std::fs::rename(&tmp, path)
+            .map_err(|e| format!("cannot rename into {}: {e}", path.display()))?;
+        Ok(())
+    })();
+    let _ = file.unlock();
+    res
+}
+
+pub fn set_slug_orders(path: &Path, ranks: &[(String, i64)]) -> Result<(), String> {
+    write_locked(path, |text| {
+        let mut doc: toml_edit::DocumentMut = text
+            .parse()
+            .map_err(|e| format!("TOML parse error in {}: {e}", path.display()))?;
+        let db = doc
+            .as_table_mut()
+            .entry("db")
+            .or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
+        let Some(db) = db.as_table_mut() else {
+            return Err("[db] is not a table".into());
+        };
+        for (slug, rank) in ranks {
+            let item = db
+                .entry(slug.as_str())
+                .or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
+            let Some(t) = item.as_table_mut() else {
+                return Err(format!("[db.{slug}] is not a table"));
+            };
+            t.insert("order", toml_edit::Item::Value((*rank).into()));
+        }
+        Ok(doc.to_string())
+    })
 }
 
 /// Set or remove display metadata for one fleet slug, preserving
@@ -313,54 +336,53 @@ pub fn set_slug_meta(
     description: Option<&str>,
     labels: Option<&[String]>,
 ) -> Result<(), String> {
-    let text = std::fs::read_to_string(path)
-        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-    let mut doc: toml_edit::DocumentMut = text
-        .parse()
-        .map_err(|e| format!("TOML parse error in {}: {e}", path.display()))?;
-    let db = doc
-        .as_table_mut()
-        .entry("db")
-        .or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
-    let Some(db) = db.as_table_mut() else {
-        return Err("[db] is not a table".into());
-    };
-    let slug_item = db
-        .entry(slug)
-        .or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
-    let Some(slug_t) = slug_item.as_table_mut() else {
-        return Err(format!("[db.{slug}] is not a table"));
-    };
-    match title {
-        Some(v) => {
-            slug_t.insert("title", toml_edit::Item::Value(v.into()));
-        }
-        None => {
-            slug_t.remove("title");
-        }
-    }
-    match description {
-        Some(v) => {
-            slug_t.insert("description", toml_edit::Item::Value(v.into()));
-        }
-        None => {
-            slug_t.remove("description");
-        }
-    }
-    match labels {
-        Some(list) if !list.is_empty() => {
-            let mut arr = toml_edit::Array::new();
-            for l in list {
-                arr.push(l.as_str());
+    write_locked(path, |text| {
+        let mut doc: toml_edit::DocumentMut = text
+            .parse()
+            .map_err(|e| format!("TOML parse error in {}: {e}", path.display()))?;
+        let db = doc
+            .as_table_mut()
+            .entry("db")
+            .or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
+        let Some(db) = db.as_table_mut() else {
+            return Err("[db] is not a table".into());
+        };
+        let slug_item = db
+            .entry(slug)
+            .or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
+        let Some(slug_t) = slug_item.as_table_mut() else {
+            return Err(format!("[db.{slug}] is not a table"));
+        };
+        match title {
+            Some(v) => {
+                slug_t.insert("title", toml_edit::Item::Value(v.into()));
             }
-            slug_t.insert("labels", toml_edit::Item::Value(arr.into()));
+            None => {
+                slug_t.remove("title");
+            }
         }
-        _ => {
-            slug_t.remove("labels");
+        match description {
+            Some(v) => {
+                slug_t.insert("description", toml_edit::Item::Value(v.into()));
+            }
+            None => {
+                slug_t.remove("description");
+            }
         }
-    }
-    std::fs::write(path, doc.to_string())
-        .map_err(|e| format!("cannot write {}: {e}", path.display()))
+        match labels {
+            Some(list) if !list.is_empty() => {
+                let mut arr = toml_edit::Array::new();
+                for l in list {
+                    arr.push(l.as_str());
+                }
+                slug_t.insert("labels", toml_edit::Item::Value(arr.into()));
+            }
+            _ => {
+                slug_t.remove("labels");
+            }
+        }
+        Ok(doc.to_string())
+    })
 }
 
 #[cfg(test)]
