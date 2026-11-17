@@ -7,7 +7,6 @@
 
 use mdrv_db::blob::BlobUpload;
 use mdrv_db::engine::{Engine, EngineConfig, MutateRequest};
-use mdrv_db::port::{DataPort, QueryOut, Stmt};
 use mdrv_db::PortValue;
 use napi::bindgen_prelude::{Error, Result, Uint8Array};
 use napi_derive::napi;
@@ -16,137 +15,6 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-// ---- Turso data port --------------------------------------------------------
-
-struct TursoPort {
-    rt: tokio::runtime::Runtime,
-    conn: std::sync::Mutex<turso::Connection>,
-}
-
-impl TursoPort {
-    fn open(db_path: PathBuf) -> std::result::Result<Self, String> {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| e.to_string())?;
-        let conn = rt
-            .block_on(async {
-                let path = db_path.display().to_string();
-                let db = turso::Builder::new_local(&path).build().await?;
-                let mut conn: turso::Connection = db.connect()?;
-                use turso::transaction::TransactionBehavior;
-                conn.set_transaction_behavior(TransactionBehavior::Immediate);
-                // pragma returns a row; consume via query (default journal
-                // mode is fine — transactions run Immediate)
-                let _ = conn.query("PRAGMA journal_mode", ()).await?;
-                Ok::<turso::Connection, turso::Error>(conn)
-            })
-            .map_err(|e: turso::Error| e.to_string())?;
-        Ok(TursoPort {
-            rt,
-            conn: std::sync::Mutex::new(conn),
-        })
-    }
-}
-
-fn to_turso_params(params: &[PortValue]) -> std::result::Result<Vec<turso::Value>, String> {
-    params
-        .iter()
-        .map(|v| match v {
-            PortValue::Null => Ok(turso::Value::Null),
-            PortValue::Int(i) => Ok(turso::Value::Integer(*i)),
-            PortValue::Real(f) => Ok(turso::Value::Real(*f)),
-            PortValue::Text(s) => Ok(turso::Value::Text(s.clone())),
-            PortValue::Blob(b) => Ok(turso::Value::Blob(b.clone())),
-            // the engine resolves Lsn at stmt-build time; reaching the port
-            // unresolved is an internal invariant violation
-            PortValue::Lsn => Err("unresolved PortValue::Lsn reached the port".into()),
-        })
-        .collect()
-}
-
-fn from_turso_value(v: turso::Value) -> PortValue {
-    match v {
-        turso::Value::Null => PortValue::Null,
-        turso::Value::Integer(i) => PortValue::Int(i),
-        turso::Value::Real(f) => PortValue::Real(f),
-        turso::Value::Text(s) => PortValue::Text(s),
-        turso::Value::Blob(b) => PortValue::Blob(b),
-    }
-}
-
-impl DataPort for TursoPort {
-    fn exec_tx(&self, stmts: &[Stmt]) -> std::result::Result<u64, String> {
-        let mut conn = self.conn.lock().unwrap();
-        let res: std::result::Result<u64, String> = self.rt.block_on(async {
-            let tx = conn.transaction().await.map_err(|e| e.to_string())?;
-            let mut total = 0u64;
-            for s in stmts {
-                let params = to_turso_params(&s.params).map_err(|e| e.to_string())?;
-                total += tx
-                    .execute(&s.sql, params)
-                    .await
-                    .map_err(|e| e.to_string())?;
-            }
-            tx.commit().await.map_err(|e| e.to_string())?;
-            Ok(total)
-        });
-        res
-    }
-
-    fn exec(&self, sql: &str) -> std::result::Result<u64, String> {
-        let conn = self.conn.lock().unwrap();
-        self.rt
-            .block_on(async { conn.execute(sql, ()).await.map_err(|e| e.to_string()) })
-    }
-
-    fn query(&self, sql: &str, params: &[PortValue]) -> std::result::Result<QueryOut, String> {
-        let conn = self.conn.lock().unwrap();
-        let res: std::result::Result<QueryOut, String> = self.rt.block_on(async {
-            let params = to_turso_params(params).map_err(|e| e.to_string())?;
-            let mut rows = conn.query(sql, params).await.map_err(|e| e.to_string())?;
-            // Rows knows its columns from the prepared statement, so names
-            // are available even when the result set is empty.
-            let names = rows.column_names();
-            let mut out = Vec::new();
-            while let Some(row) = rows.next().await.map_err(|e| e.to_string())? {
-                let n = row.column_count();
-                let mut r = Vec::with_capacity(n);
-                for i in 0..n {
-                    r.push(from_turso_value(
-                        row.get_value(i).map_err(|e| e.to_string())?,
-                    ));
-                }
-                out.push(r);
-            }
-            Ok(QueryOut { names, rows: out })
-        });
-        res
-    }
-
-    fn integrity_check(&self) -> std::result::Result<String, String> {
-        let conn = self.conn.lock().unwrap();
-        self.rt.block_on(async {
-            let mut rows = conn
-                .query("PRAGMA integrity_check", ())
-                .await
-                .map_err(|e| e.to_string())?;
-            if let Some(row) = rows.next().await.map_err(|e| e.to_string())? {
-                if let Ok(turso::Value::Text(s)) = row.get_value(0) {
-                    return Ok(s);
-                }
-            }
-            Ok::<String, String>("unknown".into())
-        })
-    }
-}
-
-// ---- napi surface -------------------------------------------------------------
-
-/// The engine lives behind Arc<Mutex<Option<Engine>>>: `close()` takes the
-/// Option to None, dropping the Engine (and with it fjall's file lock).
-/// In-flight streaming uploads live in their own map; leftovers on disk are
-/// swept by the engine's staging sweep on next open.
 struct Inner {
     engine: std::sync::Mutex<Option<Engine>>,
     uploads: std::sync::Mutex<HashMap<String, BlobUpload>>,
@@ -156,7 +24,12 @@ static UPLOAD_SEQ: AtomicU64 = AtomicU64::new(0);
 
 impl Inner {
     fn with<T>(&self, f: impl FnOnce(&Engine) -> Result<T>) -> Result<T> {
-        let guard = self.engine.lock().unwrap();
+        // a panic inside an earlier call would poison this mutex; surface
+        // that as a JS error instead of aborting on the next call
+        let guard = self
+            .engine
+            .lock()
+            .map_err(|_| Error::from_reason("engine lock poisoned by a failed call"))?;
         match guard.as_ref() {
             Some(e) => f(e),
             None => Err(Error::from_reason("engine is closed")),
@@ -186,7 +59,7 @@ impl MdrvDb {
         std::fs::create_dir_all(&root)
             .map_err(|e| Error::from_reason(format!("mkdir {data_dir}: {e}")))?;
         let live = mdrv_db::live_dir(&root);
-        let port = TursoPort::open(live.join("app.db")).map_err(Error::from_reason)?;
+        let port = mdrv_db::TursoPort::open(live.join("app.db")).map_err(Error::from_reason)?;
         let cfg = EngineConfig {
             fsync_each_write: fsync_each_write.unwrap_or(true),
         };
@@ -211,7 +84,8 @@ impl MdrvDb {
                 let out = e
                     .execute(req)
                     .map_err(|e| Error::from_reason(e.to_string()))?;
-                Ok(serde_json::to_string(&out).unwrap())
+                serde_json::to_string(&out)
+                    .map_err(|e| Error::from_reason(format!("serialize: {e}")))
             })
         })
         .await
@@ -232,7 +106,8 @@ impl MdrvDb {
                 let rows = e
                     .query(&sql, params)
                     .map_err(|e| Error::from_reason(e.to_string()))?;
-                Ok(serde_json::to_string(&rows).unwrap())
+                serde_json::to_string(&rows)
+                    .map_err(|e| Error::from_reason(format!("serialize: {e}")))
             })
         })
         .await
@@ -266,7 +141,8 @@ impl MdrvDb {
                 let (hash, size) = e
                     .put_blob(&bytes)
                     .map_err(|e| Error::from_reason(e.to_string()))?;
-                Ok(serde_json::to_string(&json!({ "hash": hash, "size": size })).unwrap())
+                serde_json::to_string(&json!({ "hash": hash, "size": size }))
+                    .map_err(|e| Error::from_reason(format!("serialize: {e}")))
             })
         })
         .await
@@ -285,7 +161,11 @@ impl MdrvDb {
             let up = e
                 .blob_upload_begin()
                 .map_err(|err| Error::from_reason(err.to_string()))?;
-            self.inner.uploads.lock().unwrap().insert(id.clone(), up);
+            self.inner
+                .uploads
+                .lock()
+                .map_err(|_| Error::from_reason("upload lock poisoned"))?
+                .insert(id.clone(), up);
             Ok(id)
         })
     }
@@ -293,7 +173,11 @@ impl MdrvDb {
     /// Append a chunk to a streaming upload.
     #[napi]
     pub fn blob_put_chunk(&self, id: String, bytes: Uint8Array) -> Result<()> {
-        let mut ups = self.inner.uploads.lock().unwrap();
+        let mut ups = self
+            .inner
+            .uploads
+            .lock()
+            .map_err(|_| Error::from_reason("upload lock poisoned"))?;
         let up = ups
             .get_mut(&id)
             .ok_or_else(|| Error::from_reason(format!("unknown upload id {id}")))?;
@@ -310,14 +194,15 @@ impl MdrvDb {
             let up = inner
                 .uploads
                 .lock()
-                .unwrap()
+                .map_err(|_| Error::from_reason("upload lock poisoned"))?
                 .remove(&id)
                 .ok_or_else(|| Error::from_reason(format!("unknown upload id {id}")))?;
             inner.with(|e| {
                 let (hash, size) = e
                     .blob_upload_finish(up)
                     .map_err(|err| Error::from_reason(err.to_string()))?;
-                Ok(serde_json::to_string(&json!({ "hash": hash, "size": size })).unwrap())
+                serde_json::to_string(&json!({ "hash": hash, "size": size }))
+                    .map_err(|e| Error::from_reason(format!("serialize: {e}")))
             })
         })
         .await
@@ -327,7 +212,13 @@ impl MdrvDb {
     /// Abort a streaming upload (temp file removed or left for the sweep).
     #[napi]
     pub fn blob_put_abort(&self, id: String) -> Result<()> {
-        if let Some(up) = self.inner.uploads.lock().unwrap().remove(&id) {
+        if let Some(up) = self
+            .inner
+            .uploads
+            .lock()
+            .map_err(|_| Error::from_reason("upload lock poisoned"))?
+            .remove(&id)
+        {
             up.abort();
         }
         Ok(())
@@ -383,7 +274,8 @@ impl MdrvDb {
                 let out = e
                     .report_export(since_ms, limit.unwrap_or(1000) as usize)
                     .map_err(|e| Error::from_reason(e.to_string()))?;
-                Ok(serde_json::to_string(&out).unwrap())
+                serde_json::to_string(&out)
+                    .map_err(|e| Error::from_reason(format!("serialize: {e}")))
             })
         })
         .await
@@ -398,7 +290,8 @@ impl MdrvDb {
             inner.with(|e| {
                 let out = mdrv_db::backup::run(e, &dest_dir)
                     .map_err(|e| Error::from_reason(e.to_string()))?;
-                Ok(serde_json::to_string(&out.manifest).unwrap())
+                serde_json::to_string(&out.manifest)
+                    .map_err(|e| Error::from_reason(format!("serialize: {e}")))
             })
         })
         .await
@@ -412,7 +305,8 @@ impl MdrvDb {
         tokio::task::spawn_blocking(move || {
             inner.with(|e| {
                 let out = mdrv_db::verify::run(e).map_err(|e| Error::from_reason(e.to_string()))?;
-                Ok(serde_json::to_string(&out).unwrap())
+                serde_json::to_string(&out)
+                    .map_err(|e| Error::from_reason(format!("serialize: {e}")))
             })
         })
         .await
@@ -428,7 +322,8 @@ impl MdrvDb {
                 let lsn = e
                     .checkpoint(compact.unwrap_or(false))
                     .map_err(|e| Error::from_reason(e.to_string()))?;
-                Ok(serde_json::to_string(&json!({ "pruned_to": lsn })).unwrap())
+                serde_json::to_string(&json!({ "pruned_to": lsn }))
+                    .map_err(|e| Error::from_reason(format!("serialize: {e}")))
             })
         })
         .await
@@ -438,8 +333,11 @@ impl MdrvDb {
     #[napi(getter)]
     pub fn status(&self) -> String {
         self.inner
-            .with(|e| Ok(serde_json::to_string(&e.status()).unwrap()))
-            .unwrap_or_else(|_| r#"{"open":false}"#.into())
+            .with(|e| {
+                serde_json::to_string(&e.status())
+                    .map_err(|e| Error::from_reason(format!("serialize: {e}")))
+            })
+            .unwrap_or_else(|_| r#"{"open":false}"#.to_string())
     }
 
     /// Persist (SyncAll) and drop the engine — releases fjall's file lock.
@@ -447,7 +345,10 @@ impl MdrvDb {
     pub async fn close(&self) -> Result<()> {
         let inner = self.inner.clone();
         tokio::task::spawn_blocking(move || {
-            let mut guard = inner.engine.lock().unwrap();
+            let mut guard = inner
+                .engine
+                .lock()
+                .map_err(|_| Error::from_reason("engine lock poisoned by a failed call"))?;
             if let Some(e) = guard.as_ref() {
                 e.persist_sync_all()
                     .map_err(|e| Error::from_reason(e.to_string()))?;
