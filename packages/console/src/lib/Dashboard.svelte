@@ -34,10 +34,12 @@
 		UnauthorizedError,
 	} from './api'
 
-	let { status, runningSlug, onunauthorized }: {
+	let { status, runningSlug, onunauthorized, onmeta, onorder }: {
 		status: FleetStatus
 		runningSlug: string | null
 		onunauthorized: () => void
+		onmeta: (entry: SlugStatus) => void
+		onorder: (slugs: string[]) => void
 	} = $props()
 
 	let selectedSlug = $state<string | null>(null)
@@ -185,7 +187,10 @@
 	async function move(slug: string, direction: 'up' | 'down') {
 		busy = 'move'
 		try {
-			await reorderFleet(slug, direction)
+			const res = await reorderFleet(slug, direction)
+			// apply the authoritative response locally; SSE is backup, not
+			// the primary path (it can lag or be gone entirely)
+			onorder(res.slugs)
 		} catch (err) {
 			if (!authFailure(err)) jobMessage = { kind: 'error', text: text(err) }
 		} finally {
@@ -201,11 +206,13 @@
 		const d = editDescription.trim()
 		const labels = editLabels.split(',').map((x) => x.trim()).filter(Boolean)
 		try {
-			await patchMeta(selected.slug, {
+			const res = await patchMeta(selected.slug, {
 				title: t === '' ? null : t,
 				description: d === '' ? null : d,
 				labels: labels.length === 0 ? null : labels,
 			})
+			// apply the authoritative entry locally; SSE is backup
+			onmeta(res.entry)
 			metaMessage = { kind: 'ok', text: 'saved to fleet config' }
 		} catch (err) {
 			if (!authFailure(err)) metaMessage = { kind: 'error', text: text(err) }

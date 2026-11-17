@@ -90,7 +90,7 @@
 	}
 
 	function watchEvents() {
-		stopEvents ??= connectEvents(handleEvent)
+		stopEvents ??= connectEvents(handleEvent, onUnauthorized)
 	}
 
 	function afterAuth(ok: boolean) {
@@ -105,6 +105,24 @@
 		status = null
 		runningSlug = null
 		unauthorized = true
+	}
+
+	/** Apply a meta PATCH response directly (SSE is only backup). */
+	function applyMeta(entry: SlugStatus) {
+		if (status === null) return
+		status = {
+			...status,
+			slugs: status.slugs.map((s) => (s.slug === entry.slug ? entry : s)),
+		}
+	}
+
+	/** Apply an order PATCH response directly (SSE is only backup). */
+	function applyOrder(slugs: string[]) {
+		if (status === null) return
+		const by = new Map(status.slugs.map((s) => [s.slug, s] as const))
+		const listed = slugs.map((slug) => by.get(slug)).filter((s) => s !== undefined)
+		const rest = status.slugs.filter((s) => !slugs.includes(s.slug))
+		status = { ...status, slugs: [...listed, ...rest] }
 	}
 
 	async function onLoginSuccess() {
@@ -141,7 +159,7 @@
 			<h1 class={heading}>mdrv-db console</h1>
 			<button class={button} onclick={onLogout}>log out</button>
 		</header>
-		<Dashboard {status} {runningSlug} onunauthorized={onUnauthorized} />
+		<Dashboard {status} {runningSlug} onunauthorized={onUnauthorized} onmeta={applyMeta} onorder={applyOrder} />
 		{#if version !== null}
 			<footer class={footer}>mdrv-db {version}</footer>
 		{/if}

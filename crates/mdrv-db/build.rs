@@ -1,5 +1,9 @@
 //! Sync the web console into the crate so `include_dir!` works both locally
 //! and inside the crates.io package (which cannot reference parent dirs).
+//!
+//! The destination is cleared before copying: vite emits content-hashed
+//! asset names, so merge-copying would accumulate every historical bundle
+//! in git and in the embedded binary.
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -33,8 +37,16 @@ fn main() {
     );
     println!("cargo:rerun-if-changed={}", src.join("assets").display());
     if src.join("index.html").is_file() {
+        if dst.exists() {
+            // hashed names change every build: a merge would keep stale
+            // bundles embedded forever
+            if let Err(e) = fs::remove_dir_all(&dst) {
+                panic!("console-dist cleanup failed: {e}");
+            }
+        }
         if let Err(e) = copy_tree(&src, &dst) {
-            println!("cargo:warning=console sync failed: {e}");
+            // a half-synced embed ships a broken console; fail the build
+            panic!("console sync failed: {e}");
         }
     }
 }
