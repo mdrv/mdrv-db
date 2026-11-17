@@ -56,7 +56,8 @@ OUT=$($BIN config --check 2>&1); check "config --check after init" 0 $?
 # --- 4. selftest (crash matrix: 8 scenarios)
 OUT=$($BIN selftest "$S" 2>&1); RC=$?
 check "selftest all scenarios" 0 $RC
-printf '%s\n' "$OUT" | grep -c '^PASS' | grep -q 8 && ok "8 PASS lines" || bad "expected 8 PASS lines, got: $(printf '%s\n' "$OUT" | grep -c '^PASS')"
+# exact count: grep -q 8 would also match 18/28/80
+[ "$(printf '%s\n' "$OUT" | grep -c '^PASS')" = "8" ] && ok "8 PASS lines" || bad "expected 8 PASS lines, got: $(printf '%s\n' "$OUT" | grep -c '^PASS')"
 printf '%s\n' "$OUT" | grep -q '^FAIL' && bad "selftest had FAIL lines" || ok "no FAIL lines"
 
 # --- 5. info + dump on a populated selftest db
@@ -103,6 +104,12 @@ expect_contains "restore verifies" "$OUT" 'verify'
 [ -d "$REST/live/fjall" ] && ok "restored into live/ layout" || bad "restore missing live/fjall"
 OUT=$($BIN info "$REST" 2>&1); check "info on restored" 0 $?
 $BIN restore "$BK" "$REST" >/dev/null 2>&1; check "restore refuses overwrite" 1 $?
+# regression: a flat-layout envelope (fjall/ at the root) must not be
+# shadowed by a fresh live/ dir created by restore
+mkdir -p "$T/flatdb/fjall" "$T/fakebk"
+printf '{ "name": "x" }' > "$T/fakebk/manifest.json"
+OUT=$($BIN restore "$T/fakebk" "$T/flatdb" 2>&1); check "restore refuses flat layout" 1 $?
+expect_contains "flat refusal explains" "$OUT" "flat-layout"
 
 # --- 8. checkpoint / prune
 OUT=$($BIN checkpoint "$DB" --compact 2>&1); check "checkpoint --compact" 0 $?
@@ -192,6 +199,11 @@ if command -v curl >/dev/null; then
     expect_contains "sse status frame" "$SSE" '"type":"status"'
     expect_contains "sse job.started" "$SSE" '"type":"job.started"'
     expect_contains "sse job.finished" "$SSE" '"type":"job.finished"'
+    # regression: dot-segment paths must never escape the console dir
+    # (curl --path-as-is keeps the ../ segments; without it curl collapses
+    # them client-side and the bug would not be exercised)
+    check "console traversal blocked" 0 0
+    [ "$(curl -s --path-as-is -o /dev/null -w '%{http_code}' $B/../../../../../etc/passwd)" = 404 ] || { echo FAIL: traversal; FAIL=$((FAIL+1)); }
     kill $DPID 2>/dev/null; wait $DPID 2>/dev/null
 else
     echo "skip: curl not available"
