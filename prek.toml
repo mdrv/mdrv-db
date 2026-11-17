@@ -1,0 +1,63 @@
+# Configuration file for `prek`, a git hook framework written in Rust.
+# See https://prek.j178.dev for more information.
+#:schema https://www.schemastore.org/prek.json
+
+[[repos]]
+repo = "local"
+hooks = [
+  {
+    id = "version-check",
+    name = "manifest versions in sync",
+    entry = "scripts/version-check.sh",
+    language = "system",
+    pass_filenames = false
+  },
+  {
+    id = "yaml-parse",
+    name = "release.yml parses",
+    entry = "python3 -c 'import sys, yaml; yaml.safe_load(open(sys.argv[1]))'",
+    language = "system",
+    files = '^\.github/workflows/.*\.ya?ml$'
+  },
+  {
+    id = "bash-syntax",
+    name = "bash -n shell scripts",
+    entry = "bash -n",
+    language = "system",
+    files = '(^scripts/.*\.sh$|PKGBUILD\.template$)'
+  },
+  {
+    id = "cargo-fmt",
+    name = "cargo fmt --check",
+    entry = "cargo fmt --check",
+    language = "system",
+    pass_filenames = false,
+    files = '\.rs$'
+  },
+  {
+    id = "clippy",
+    name = "cargo clippy -D warnings",
+    entry = "cargo clippy --workspace --all-targets -- -D warnings",
+    language = "system",
+    pass_filenames = false,
+    stages = ["pre-push"],
+    files = '\.rs$'
+  },
+  {
+    id = "clippy-all-features",
+    name = "cargo clippy --all-features -D warnings",
+    entry = "cargo clippy --workspace --all-features --all-targets -- -D warnings",
+    language = "system",
+    pass_filenames = false,
+    stages = ["pre-push"],
+    files = '\.rs$'
+  },
+  {
+    id = "cli-test",
+    name = "cli-test.sh",
+    entry = "bash scripts/cli-test.sh",
+    language = "system",
+    pass_filenames = false,
+    stages = ["pre-push"]
+  }
+]
