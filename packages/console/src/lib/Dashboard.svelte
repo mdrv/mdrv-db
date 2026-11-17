@@ -4,7 +4,10 @@
 		button,
 		detailCell,
 		errorText,
+		filterRow,
 		heading,
+		input,
+		label,
 		logList,
 		metaGrid,
 		muted,
@@ -22,9 +25,11 @@
 		getBackups,
 		getReport,
 		type LastResult,
+		patchMeta,
 		postBackup,
 		postPrune,
 		type ReportEntry,
+		reorderFleet,
 		type SlugStatus,
 		UnauthorizedError,
 	} from './api'
@@ -36,7 +41,7 @@
 	} = $props()
 
 	let selectedSlug = $state<string | null>(null)
-	let busy = $state<'backup' | 'prune' | 'report' | null>(null)
+	let busy = $state<'backup' | 'prune' | 'report' | 'move' | null>(null)
 	let jobMessage = $state<{ kind: 'ok' | 'error'; text: string } | null>(null)
 	let pruneMessage = $state<string | null>(null)
 	let backups = $state<BackupEntry[] | null>(null)
@@ -44,8 +49,32 @@
 	let report = $state<ReportEntry[] | null>(null)
 	let reportError = $state<string | null>(null)
 
+	let filter = $state('')
+	let activeLabel = $state<string | null>(null)
+	let editTitle = $state('')
+	let editDescription = $state('')
+	let editLabels = $state('')
+	let metaBusy = $state(false)
+	let metaMessage = $state<{ kind: 'ok' | 'error'; text: string } | null>(null)
+
 	const selected = $derived(
 		status.slugs.find((s) => s.slug === selectedSlug) ?? null,
+	)
+
+	const filtered = $derived.by(() => {
+		const q = filter.trim().toLowerCase()
+		return status.slugs.filter((s) => {
+			if (activeLabel !== null && !(s.labels ?? []).includes(activeLabel)) return false
+			if (q === '') return true
+			const hay = [s.slug, s.name ?? '', s.title ?? '', ...(s.labels ?? [])]
+				.join(' ')
+				.toLowerCase()
+			return hay.includes(q)
+		})
+	})
+
+	const allLabels = $derived(
+		[...new Set(status.slugs.flatMap((s) => s.labels ?? []))].sort(),
 	)
 
 	const levelVariant = ['never', 'ok', 'skipped', 'error'] as const
@@ -112,6 +141,11 @@
 		backupsError = null
 		report = null
 		reportError = null
+		const cur = status.slugs.find((s) => s.slug === selectedSlug)
+		editTitle = cur?.title ?? ''
+		editDescription = cur?.description ?? ''
+		editLabels = (cur?.labels ?? []).join(', ')
+		metaMessage = null
 		if (selectedSlug !== null) void loadBackups(selectedSlug)
 	}
 
@@ -148,6 +182,38 @@
 		}
 	}
 
+	async function move(slug: string, direction: 'up' | 'down') {
+		busy = 'move'
+		try {
+			await reorderFleet(slug, direction)
+		} catch (err) {
+			if (!authFailure(err)) jobMessage = { kind: 'error', text: text(err) }
+		} finally {
+			busy = null
+		}
+	}
+
+	async function saveMeta() {
+		if (!selected) return
+		metaBusy = true
+		metaMessage = null
+		const t = editTitle.trim()
+		const d = editDescription.trim()
+		const labels = editLabels.split(',').map((x) => x.trim()).filter(Boolean)
+		try {
+			await patchMeta(selected.slug, {
+				title: t === '' ? null : t,
+				description: d === '' ? null : d,
+				labels: labels.length === 0 ? null : labels,
+			})
+			metaMessage = { kind: 'ok', text: 'saved to fleet config' }
+		} catch (err) {
+			if (!authFailure(err)) metaMessage = { kind: 'error', text: text(err) }
+		} finally {
+			metaBusy = false
+		}
+	}
+
 	async function toggleReport() {
 		if (report !== null || reportError !== null) {
 			report = null
@@ -174,6 +240,24 @@
 </script>
 
 <div class={panel}>
+	<div class={filterRow}>
+		<input
+			class={input}
+			placeholder='filter by slug, title, label'
+			title='filters the fleet table; labels are clickable below'
+			bind:value={filter}
+		/>
+		{#each allLabels as lb (lb)}
+			<button
+				class={button}
+				data-active={activeLabel === lb}
+				title='show only databases with this label'
+				onclick={() => (activeLabel = activeLabel === lb ? null : lb)}
+			>
+				{lb}
+			</button>
+		{/each}
+	</div>
 	<table class={table}>
 		<thead>
 			<tr>
@@ -183,17 +267,23 @@
 				<th>last run</th>
 				<th>next run</th>
 				<th>backups</th>
+				<th title='fleet display order; disabled while a filter is active'>order</th>
 				<th>detail</th>
 			</tr>
 		</thead>
 		<tbody>
-			{#each status.slugs as s (s.slug)}
+			{#each filtered as s, i (s.slug)}
 				<tr
 					class={selectedSlug === s.slug ? rowActive : undefined}
 					onclick={() => select(s.slug)}
 				>
-					<td>{s.slug} {#if runningSlug === s.slug}<span class={badge} data-tone='running'>running…</span>{/if}</td>
-					<td>{s.name}</td>
+					<td>
+						{s.slug} {#if runningSlug === s.slug}<span class={badge} data-tone='running'>running…</span>{/if}
+						{#each s.labels ?? [] as lb (lb)}<span class={badge} data-tone='label'>{lb}</span>{/each}
+					</td>
+					<td>
+						{#if s.title}{s.title}{#if s.name} <span class={muted}>({s.name})</span>{/if}{:else}{s.name}{/if}
+					</td>
 					<td>
 						<span class={badge} data-tone={resultVariant(s.last_result)}
 						>{s.last_result}</span>
@@ -201,12 +291,36 @@
 					<td>{formatMs(s.last_run_ms)}</td>
 					<td>{formatMs(s.next_run_ms)}</td>
 					<td>{s.backups}</td>
+					<td>
+						<button
+							class={button}
+							title='move this database up in the fleet list'
+							disabled={i === 0 || busy !== null || filter.trim() !== '' || activeLabel !== null}
+							onclick={(e) => {
+								e.stopPropagation()
+								void move(s.slug, 'up')
+							}}
+						>▲</button>
+						<button
+							class={button}
+							title='move this database down in the fleet list'
+							disabled={i === filtered.length - 1 || busy !== null || filter.trim() !== '' || activeLabel !== null}
+							onclick={(e) => {
+								e.stopPropagation()
+								void move(s.slug, 'down')
+							}}
+						>▼</button>
+					</td>
 					<td class={detailCell}>{s.detail ?? '—'}</td>
 				</tr>
 			{:else}
 				<tr>
-					<td colspan={7} class={muted}>
-						no databases configured — check fleet config
+					<td colspan={8} class={muted}>
+						{#if status.slugs.length === 0}
+							no databases configured — check fleet config
+						{:else}
+							no databases match the filter
+						{/if}
 					</td>
 				</tr>
 			{/each}
@@ -217,11 +331,15 @@
 {#if selected}
 	<div class={panel}>
 		<h2 class={heading}>
-			{selected.slug} <span class={muted}>— {selected.name}</span>
+			{selected.slug} <span class={muted}>— {selected.title ?? selected.name}</span>
 		</h2>
 		<dl class={metaGrid}>
 			<dt>data_dir</dt>
 			<dd>{selected.data_dir}</dd>
+				{#if selected.description}
+					<dt title='from fleet config, editable below'>description</dt>
+					<dd>{selected.description}</dd>
+				{/if}
 			<dt>cron</dt>
 			<dd>{selected.cron}</dd>
 			<dt>retention</dt>
@@ -245,6 +363,18 @@
 		{#if selected.detail}
 			<p class={muted}>{selected.detail}</p>
 		{/if}
+		<label class={label} for='meta-title'>title</label>
+		<input id='meta-title' class={input} bind:value={editTitle} placeholder={selected.name ?? selected.slug} />
+		<label class={label} for='meta-description'>description</label>
+		<input id='meta-description' class={input} bind:value={editDescription} />
+		<label class={label} for='meta-labels' title='comma-separated, max 8, each max 32 chars'>labels</label>
+		<input id='meta-labels' class={input} bind:value={editLabels} title='comma-separated, max 8, each max 32 chars' placeholder='prod, weekly' />
+		<div class={row}>
+			<button class={button} data-variant='primary' disabled={metaBusy} onclick={saveMeta}>
+				{metaBusy ? 'saving…' : 'save metadata'}
+			</button>
+			{#if metaMessage}<span class={metaMessage.kind === 'error' ? errorText : okText}>{metaMessage.text}</span>{/if}
+		</div>
 		<div class={row}>
 			<button
 				class={button}

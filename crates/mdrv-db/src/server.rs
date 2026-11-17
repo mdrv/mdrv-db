@@ -11,6 +11,8 @@
 //!   GET  /api/version              -> binary version (authed)
 //!   GET  /healthz                  -> liveness probe (no auth)
 //!   GET  /api/events               -> SSE: job.started / job.finished / status
+//!   PATCH /api/slugs/{slug}/meta  -> set title/description/labels (config edit)
+//!   PATCH /api/fleet/order        -> move a slug up/down (config edit)
 //!
 //! Auth: `MDRV_DB_ADMIN_TOKEN`; when unset a token is generated and printed
 //! once. All routes except POST /login require the session cookie.
@@ -20,12 +22,12 @@ use axum::extract::{Path as ReqPath, Query, State as AxState};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{get, patch, post};
 use axum::{Json, Router};
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use tokio_stream::wrappers::{BroadcastStream, IntervalStream};
 use tokio_stream::StreamExt;
 
@@ -34,7 +36,8 @@ static CONSOLE: include_dir::Dir = include_dir::include_dir!("$CARGO_MANIFEST_DI
 const COOKIE: &str = "mdrv_db_session";
 
 pub(crate) struct App {
-    jobs: Vec<Job>,
+    jobs: RwLock<Vec<Job>>,
+    config_path: PathBuf,
     token: String,
     sessions: Mutex<HashSet<String>>,
     events: tokio::sync::broadcast::Sender<String>,
@@ -185,46 +188,47 @@ async fn logout(AxState(app): AxState<Arc<App>>, headers: HeaderMap) -> Response
     resp
 }
 
+fn entry_json(j: &Job, states: &Mutex<HashMap<String, JobState>>) -> serde_json::Value {
+    let states = states.lock().ok();
+    let st = states
+        .as_ref()
+        .and_then(|m| m.get(&j.slug))
+        .cloned()
+        .or_else(|| daemon::load_state(j));
+    let (last_run_ms, last_result, detail, next_run_ms, last_backup, applied_lsn) = match st {
+        Some(s) => (
+            Some(s.last_run_ms),
+            s.last_result,
+            s.detail,
+            Some(s.next_run_ms),
+            s.last_backup,
+            s.applied_lsn,
+        ),
+        None => (None, "never".into(), String::new(), None, None, None),
+    };
+    json!({
+        "slug": j.slug,
+        "name": j.name,
+        "title": j.title,
+        "description": j.description,
+        "labels": j.labels,
+        "data_dir": j.data_dir.display().to_string(),
+        "cron": j.cron,
+        "retention_days": j.retention_days,
+        "initialized": j.data_dir.join("live/fjall").is_dir(),
+        "backups": daemon::count_backups(&j.data_dir.join("recovery")),
+        "last_run_ms": last_run_ms,
+        "last_result": last_result,
+        "detail": detail,
+        "next_run_ms": next_run_ms,
+        "last_backup": last_backup,
+        "applied_lsn": applied_lsn,
+    })
+}
+
 fn snapshot(app: &App) -> serde_json::Value {
-    let states = app.states.lock().ok();
-    let slugs: Vec<serde_json::Value> = app
-        .jobs
-        .iter()
-        .map(|j| {
-            let st = states
-                .as_ref()
-                .and_then(|m| m.get(&j.slug))
-                .cloned()
-                .or_else(|| daemon::load_state(j));
-            let (last_run_ms, last_result, detail, next_run_ms, last_backup, applied_lsn) = match st
-            {
-                Some(s) => (
-                    Some(s.last_run_ms),
-                    s.last_result,
-                    s.detail,
-                    Some(s.next_run_ms),
-                    s.last_backup,
-                    s.applied_lsn,
-                ),
-                None => (None, "never".into(), String::new(), None, None, None),
-            };
-            json!({
-                "slug": j.slug,
-                "name": j.name,
-                "data_dir": j.data_dir.display().to_string(),
-                "cron": j.cron,
-                "retention_days": j.retention_days,
-                "initialized": j.data_dir.join("live/fjall").is_dir(),
-                "backups": daemon::count_backups(&j.data_dir.join("recovery")),
-                "last_run_ms": last_run_ms,
-                "last_result": last_result,
-                "detail": detail,
-                "next_run_ms": next_run_ms,
-                "last_backup": last_backup,
-                "applied_lsn": applied_lsn,
-            })
-        })
-        .collect();
+    let jobs = app.jobs.read().map(|g| g.clone()).unwrap_or_default();
+    let slugs: Vec<serde_json::Value> = jobs.iter().map(|j| entry_json(j, &app.states)).collect();
     json!({"type": "status", "slugs": slugs})
 }
 
@@ -239,8 +243,9 @@ async fn status(AxState(app): AxState<Arc<App>>, headers: HeaderMap) -> Response
     Json(snapshot(&app)).into_response()
 }
 
-fn job_of<'a>(app: &'a App, slug: &str) -> Option<&'a Job> {
-    app.jobs.iter().find(|j| j.slug == slug)
+fn job_of(app: &App, slug: &str) -> Option<Job> {
+    let jobs = app.jobs.read().ok()?;
+    jobs.iter().find(|j| j.slug == slug).cloned()
 }
 
 async fn backups(
@@ -458,6 +463,194 @@ async fn prune(
     }
 }
 
+/// Body validation: `null` (or empty string / empty array) removes the
+/// key; strings are trimmed and length-capped; labels are capped in
+/// count and length.
+fn meta_str(v: &serde_json::Value, field: &str, max: usize) -> Result<Option<String>, String> {
+    match v {
+        serde_json::Value::Null => Ok(None),
+        serde_json::Value::String(s) => {
+            let t = s.trim();
+            if t.is_empty() {
+                Ok(None)
+            } else if t.len() > max {
+                Err(format!("{field} too long (max {max} chars)"))
+            } else {
+                Ok(Some(t.to_string()))
+            }
+        }
+        _ => Err(format!("{field} must be a string or null")),
+    }
+}
+
+fn meta_labels(v: &serde_json::Value) -> Result<Option<Vec<String>>, String> {
+    match v {
+        serde_json::Value::Null => Ok(None),
+        serde_json::Value::Array(a) => {
+            let mut out = Vec::new();
+            for item in a {
+                let s = item
+                    .as_str()
+                    .ok_or_else(|| "labels must be strings".to_string())?
+                    .trim()
+                    .to_string();
+                if s.is_empty() {
+                    continue;
+                }
+                if s.len() > 32 {
+                    return Err("label too long (max 32 chars)".into());
+                }
+                out.push(s);
+            }
+            if out.len() > 8 {
+                return Err("too many labels (max 8)".into());
+            }
+            if out.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(out))
+            }
+        }
+        _ => Err("labels must be an array of strings or null".into()),
+    }
+}
+
+/// Parsed PATCH body: (title, description, labels); None removes a key.
+type MetaPatch = (Option<String>, Option<String>, Option<Vec<String>>);
+
+/// Fleet-config edit: title/description/labels for one slug. Writes the
+/// config file via toml_edit (comments preserved), swaps the in-memory
+/// job, and publishes a `meta` SSE event.
+async fn meta(
+    AxState(app): AxState<Arc<App>>,
+    ReqPath(slug): ReqPath<String>,
+    headers: HeaderMap,
+    Json(body): Json<serde_json::Value>,
+) -> Response {
+    if !authed(&app, &headers) {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error": "unauthorized"})),
+        )
+            .into_response();
+    }
+    if job_of(&app, &slug).is_none() {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "no such slug"})),
+        )
+            .into_response();
+    }
+    let (Some(tv), Some(dv), Some(lv)) = (
+        body.get("title"),
+        body.get("description"),
+        body.get("labels"),
+    ) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "meta body must include title, description, labels"})),
+        )
+            .into_response();
+    };
+    let parsed: Result<MetaPatch, String> = (|| {
+        Ok((
+            meta_str(tv, "title", 120)?,
+            meta_str(dv, "description", 400)?,
+            meta_labels(lv)?,
+        ))
+    })();
+    let (title, description, labels) = match parsed {
+        Ok(x) => x,
+        Err(e) => {
+            return (StatusCode::BAD_REQUEST, Json(json!({ "error": e }))).into_response();
+        }
+    };
+    if let Err(e) = crate::config::set_slug_meta(
+        &app.config_path,
+        &slug,
+        title.as_deref(),
+        description.as_deref(),
+        labels.as_deref(),
+    ) {
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))).into_response();
+    }
+    if let Ok(mut jobs) = app.jobs.write() {
+        if let Some(slot) = jobs.iter_mut().find(|x| x.slug == slug) {
+            slot.title = title.clone();
+            slot.description = description.clone();
+            slot.labels = labels.clone();
+        }
+    }
+    let updated = match job_of(&app, &slug) {
+        Some(j) => entry_json(&j, &app.states),
+        None => json!({"slug": slug}),
+    };
+    let _ = app.events.send(
+        json!({"type": "meta", "slug": slug, "title": title, "description": description, "labels": labels})
+            .to_string(),
+    );
+    Json(json!({"type": "meta", "slug": slug, "entry": updated})).into_response()
+}
+
+/// Move one slug up/down in the fleet display order. Ranks are rewritten
+/// densely (order = 0..n) into the fleet config; the in-memory job list is
+/// swapped to match and a full status frame is broadcast.
+async fn reorder(
+    AxState(app): AxState<Arc<App>>,
+    headers: HeaderMap,
+    Json(body): Json<serde_json::Value>,
+) -> Response {
+    if !authed(&app, &headers) {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error": "unauthorized"})),
+        )
+            .into_response();
+    }
+    let slug = body.get("slug").and_then(|v| v.as_str()).unwrap_or("");
+    let direction = body.get("direction").and_then(|v| v.as_str()).unwrap_or("");
+    if slug.is_empty() || !matches!(direction, "up" | "down") {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "body must be {slug, direction: up|down}"})),
+        )
+            .into_response();
+    }
+    let mut seq: Vec<String> = app
+        .jobs
+        .read()
+        .map(|g| g.iter().map(|j| j.slug.clone()).collect())
+        .unwrap_or_default();
+    let Some(idx) = seq.iter().position(|s| s == slug) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "no such slug"})),
+        )
+            .into_response();
+    };
+    let target = match direction {
+        "up" if idx > 0 => Some(idx - 1),
+        "down" if idx + 1 < seq.len() => Some(idx + 1),
+        _ => None,
+    };
+    if let Some(t) = target {
+        seq.swap(idx, t);
+        let ranks: Vec<(String, i64)> = seq
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (s.clone(), i as i64))
+            .collect();
+        if let Err(e) = crate::config::set_slug_orders(&app.config_path, &ranks) {
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))).into_response();
+        }
+        if let Ok(mut jobs) = app.jobs.write() {
+            jobs.swap(idx, t);
+        }
+        let _ = app.events.send(snapshot(&app).to_string());
+    }
+    Json(json!({"type": "order", "slugs": seq})).into_response()
+}
+
 async fn healthz() -> Response {
     Json(json!({"ok": true})).into_response()
 }
@@ -526,6 +719,7 @@ pub(crate) struct Opts {
     pub console: Option<PathBuf>,
     pub interval_secs: u64,
     pub jobs: Vec<Job>,
+    pub config_path: PathBuf,
     pub data_root: PathBuf,
 }
 
@@ -573,7 +767,8 @@ pub(crate) fn serve(opts: Opts) -> Result<(), String> {
         }
     }
     let app = Arc::new(App {
-        jobs: opts.jobs.clone(),
+        jobs: RwLock::new(opts.jobs.clone()),
+        config_path: opts.config_path.clone(),
         token,
         sessions: Mutex::new(HashSet::new()),
         events: tx,
@@ -601,8 +796,11 @@ pub(crate) fn serve(opts: Opts) -> Result<(), String> {
                         Ok(m) => m,
                         Err(_) => continue,
                     };
-                    sched_app
-                        .jobs
+                    let jobs = match sched_app.jobs.read() {
+                        Ok(g) => g.clone(),
+                        Err(_) => continue,
+                    };
+                    jobs
                         .iter()
                         .filter(|j| j.cron.is_some())
                         .filter(|j| {
@@ -646,6 +844,8 @@ pub(crate) fn serve(opts: Opts) -> Result<(), String> {
             .route("/api/slugs/{slug}/report", get(report))
             .route("/api/slugs/{slug}/backup", post(backup_now))
             .route("/api/slugs/{slug}/prune", post(prune))
+            .route("/api/slugs/{slug}/meta", patch(meta))
+            .route("/api/fleet/order", patch(reorder))
             .route("/api/events", get(events))
             .route("/", get(index))
             .fallback(fallback)

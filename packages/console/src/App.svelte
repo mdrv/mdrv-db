@@ -25,6 +25,23 @@
 			status = event
 			return
 		}
+		if (event.type === 'meta') {
+			if (status === null) return
+			status = {
+				...status,
+				slugs: status.slugs.map((s) =>
+					s.slug === event.slug
+						? {
+							...s,
+							title: event.title,
+							description: event.description,
+							labels: event.labels,
+						}
+						: s
+				),
+			}
+			return
+		}
 		if (event.type === 'job.started') {
 			runningSlug = event.slug
 			return

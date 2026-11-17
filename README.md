@@ -123,6 +123,9 @@ owner = "alice" # engine name is NOT set here: it lives in live/ meta (stamped
 # by `init`), and a mismatched `name =` field makes the daemon
 # skip the slug (name-guard refuses the open)
 data_dir = "~/.local/share/mdrv-db/main.example.id"
+title = "Main app database" # human label shown in the console
+description = "Primary store for the main app" # free-form, optional
+labels = ["prod", "core"] # console filter chips, optional
 rpc = "127.0.0.1:8100/mdrv/rpc" # admin RPC when the owner app is up
 token_env = "MAIN_ADMIN_TOKEN"
 [db.main.backup]
@@ -134,6 +137,15 @@ admins = ["alice"]
 ```
 
 Envelope knobs are generic fleet-wide; `[db.<slug>.<app>]` subtables belong to the owning app.
+
+`title`, `description`, and `labels` are editable from the console (PATCH
+`/api/slugs/{slug}/meta`) or `mdrv-db config --set 'db.main.title=...'`;
+edits go through `toml_edit` so comments and formatting in the file survive.
+
+Fleet display order: the console lists slugs by `order = N` (ascending),
+then the rest alphabetically. The console's move buttons (or PATCH
+`/api/fleet/order` with `{slug, direction}`) rewrite ranks densely via
+`toml_edit`; slugs without an `order` key stay unranked at the bottom.
 
 ## Migrating a legacy (flat) layout
 

@@ -28,6 +28,10 @@ pub(crate) struct Job {
     pub(crate) retention_days: Option<i64>,
     pub(crate) keep: Option<usize>,
     pub(crate) min_free: Option<u64>,
+    pub(crate) title: Option<String>,
+    pub(crate) description: Option<String>,
+    pub(crate) labels: Option<Vec<String>>,
+    pub(crate) order: Option<i64>,
 }
 
 #[derive(Clone, serde::Deserialize, serde::Serialize)]
@@ -70,6 +74,17 @@ fn jobs(cfg: &toml::Value) -> Vec<Job> {
             .or_else(|| data_root.as_ref().map(|r| r.join(slug)))
             .unwrap_or_else(|| crate::config::default_data_dir(slug));
         let name = t.get("name").and_then(|v| v.as_str()).map(String::from);
+        let title = t.get("title").and_then(|v| v.as_str()).map(String::from);
+        let description = t
+            .get("description")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        let labels = t.get("labels").and_then(|v| v.as_array()).map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str().map(String::from))
+                .collect::<Vec<_>>()
+        });
+        let order = t.get("order").and_then(|v| v.as_integer());
         let (cron, retention_days, keep, min_free) = match t.get("backup") {
             Some(b) => (
                 b.get("cron").and_then(|v| v.as_str()).map(String::from),
@@ -93,8 +108,20 @@ fn jobs(cfg: &toml::Value) -> Vec<Job> {
             retention_days,
             keep,
             min_free,
+            title,
+            description,
+            labels,
+            order,
         });
     }
+    // Display order: explicit `order = N` first (ascending), then the
+    // rest alphabetically. toml::Table iteration is B-tree order, so
+    // physical file order is not a usable ranking.
+    out.sort_by(|a, b| {
+        let ka = (a.order.unwrap_or(i64::MAX), a.slug.as_str());
+        let kb = (b.order.unwrap_or(i64::MAX), b.slug.as_str());
+        ka.cmp(&kb)
+    });
     out
 }
 
@@ -447,6 +474,7 @@ pub fn run(
         console,
         interval_secs,
         jobs: js,
+        config_path: cfg_path,
         data_root,
     }) {
         Ok(()) => ExitCode::SUCCESS,

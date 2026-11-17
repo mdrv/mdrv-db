@@ -195,7 +195,7 @@ fn fmt_cadence(v: Option<&toml::Value>) -> String {
 }
 
 /// `mdrv-db config --set db.myapp.data_dir=~/.local/share/mdrv-db/myapp`
-/// Writes the TOML back preserving comments where possible (single-key edit).
+/// Single-key edit that preserves comments and formatting (toml_edit).
 fn set_prop(path: &Path, expr: &str) -> ExitCode {
     let (key, val) = match expr.split_once('=') {
         Some(kv) => kv,
@@ -211,51 +211,221 @@ fn set_prop(path: &Path, expr: &str) -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    let mut cfg: toml::Value = match toml::from_str(&text) {
-        Ok(c) => c,
+    let out = match apply_set(&text, key, val) {
+        Ok(o) => o,
         Err(e) => {
-            eprintln!("TOML parse error: {e}");
+            eprintln!("{e}");
             return ExitCode::from(1);
         }
     };
-    let parts: Vec<&str> = key.split('.').collect();
-    let Some(table) = cfg.as_table_mut() else {
+    if let Err(e) = std::fs::write(path, out) {
+        eprintln!("cannot write {}: {e}", path.display());
         return ExitCode::from(1);
-    };
-    let mut cur = table;
+    }
+    println!("{key} = {val}");
+    ExitCode::SUCCESS
+}
+
+/// Pure core of `--set`: parse `text`, set `key` (a dot path) to `val`,
+/// and return the serialized document. Missing intermediate tables are
+/// created; the value is parsed as bool/int/`[..]` string array, else
+/// stored verbatim as a string.
+fn apply_set(text: &str, key: &str, val: &str) -> Result<String, String> {
+    let mut doc: toml_edit::DocumentMut =
+        text.parse().map_err(|e| format!("TOML parse error: {e}"))?;
+    let parts: Vec<&str> = key.split('.').collect();
+    if parts.iter().any(|p| p.is_empty()) {
+        return Err("--set expects KEY=VALUE with a non-empty dot path".into());
+    }
+    let mut cur = doc.as_table_mut();
     for p in &parts[..parts.len() - 1] {
-        cur = match cur
-            .entry(p.to_string())
-            .or_insert_with(|| toml::Value::Table(Default::default()))
-        {
-            toml::Value::Table(t) => t,
-            _ => {
-                eprintln!("{p} is not a table");
-                return ExitCode::from(1);
-            }
+        let slot = cur
+            .entry(p)
+            .or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
+        cur = match slot.as_table_mut() {
+            Some(t) => t,
+            None => return Err(format!("{p} is not a table")),
         };
     }
-    let last = parts[parts.len() - 1];
-    let parsed: toml::Value = match val.parse::<i64>() {
-        Ok(n) => toml::Value::Integer(n),
-        Err(_) => match val.parse::<bool>() {
-            Ok(b) => toml::Value::Boolean(b),
-            Err(_) => toml::Value::String(val.to_string()),
-        },
-    };
-    cur.insert(last.to_string(), parsed);
-    match toml::to_string_pretty(&cfg) {
-        Ok(out) => {
-            if let Err(e) = std::fs::write(path, out) {
-                eprintln!("cannot write {}: {e}", path.display());
-                return ExitCode::from(1);
+    cur.insert(parts[parts.len() - 1], parse_value(val));
+    Ok(doc.to_string())
+}
+
+/// Values for `--set`: `true`/`false`, integers, `["a", "b"]` string
+/// arrays, anything else verbatim as a string.
+fn parse_value(val: &str) -> toml_edit::Item {
+    let v = val.trim();
+    if v == "true" || v == "false" {
+        return toml_edit::Item::Value((v == "true").into());
+    }
+    if let Ok(i) = v.parse::<i64>() {
+        return toml_edit::Item::Value(i.into());
+    }
+    if v.starts_with('[') && v.ends_with(']') {
+        let mut arr = toml_edit::Array::new();
+        for part in v[1..v.len() - 1].split(',') {
+            let p = part.trim();
+            if p.is_empty() {
+                continue;
             }
-            println!("{key} = {val}");
-            ExitCode::SUCCESS
+            arr.push(p.trim_matches('"').trim_matches('\''));
         }
-        Err(e) => {
-            eprintln!("TOML serialize error: {e}");
-            ExitCode::from(1)
+        return toml_edit::Item::Value(arr.into());
+    }
+    toml_edit::Item::Value(val.into())
+}
+
+/// Rewrite the per-slug display rank (`order = N`) for a whole fleet.
+/// `ranks` maps slug -> position; missing slug tables are created.
+pub fn set_slug_orders(path: &Path, ranks: &[(String, i64)]) -> Result<(), String> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    let mut doc: toml_edit::DocumentMut = text
+        .parse()
+        .map_err(|e| format!("TOML parse error in {}: {e}", path.display()))?;
+    let db = doc
+        .as_table_mut()
+        .entry("db")
+        .or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
+    let Some(db) = db.as_table_mut() else {
+        return Err("[db] is not a table".into());
+    };
+    for (slug, rank) in ranks {
+        let item = db
+            .entry(slug.as_str())
+            .or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
+        let Some(t) = item.as_table_mut() else {
+            return Err(format!("[db.{slug}] is not a table"));
+        };
+        t.insert("order", toml_edit::Item::Value((*rank).into()));
+    }
+    std::fs::write(path, doc.to_string())
+        .map_err(|e| format!("cannot write {}: {e}", path.display()))
+}
+
+/// Set or remove display metadata for one fleet slug, preserving
+/// comments and formatting. `None` removes the key; an empty labels
+/// slice removes the key.
+pub fn set_slug_meta(
+    path: &Path,
+    slug: &str,
+    title: Option<&str>,
+    description: Option<&str>,
+    labels: Option<&[String]>,
+) -> Result<(), String> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    let mut doc: toml_edit::DocumentMut = text
+        .parse()
+        .map_err(|e| format!("TOML parse error in {}: {e}", path.display()))?;
+    let db = doc
+        .as_table_mut()
+        .entry("db")
+        .or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
+    let Some(db) = db.as_table_mut() else {
+        return Err("[db] is not a table".into());
+    };
+    let slug_item = db
+        .entry(slug)
+        .or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
+    let Some(slug_t) = slug_item.as_table_mut() else {
+        return Err(format!("[db.{slug}] is not a table"));
+    };
+    match title {
+        Some(v) => {
+            slug_t.insert("title", toml_edit::Item::Value(v.into()));
         }
+        None => {
+            slug_t.remove("title");
+        }
+    }
+    match description {
+        Some(v) => {
+            slug_t.insert("description", toml_edit::Item::Value(v.into()));
+        }
+        None => {
+            slug_t.remove("description");
+        }
+    }
+    match labels {
+        Some(list) if !list.is_empty() => {
+            let mut arr = toml_edit::Array::new();
+            for l in list {
+                arr.push(l.as_str());
+            }
+            slug_t.insert("labels", toml_edit::Item::Value(arr.into()));
+        }
+        _ => {
+            slug_t.remove("labels");
+        }
+    }
+    std::fs::write(path, doc.to_string())
+        .map_err(|e| format!("cannot write {}: {e}", path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SAMPLE: &str = concat!(
+        "# fleet header\n",
+        "[fleet]\n",
+        "data_dir = \"/db\"\n",
+        "\n",
+        "# ap26 is the busiest\n",
+        "[db.ap26]\n",
+        "name = \"ap26\"\n",
+    );
+
+    #[test]
+    fn set_preserves_comments_and_formatting() {
+        let out = apply_set(SAMPLE, "db.ap26.title", "AP tracker").expect("set");
+        assert!(out.contains("# fleet header"));
+        assert!(out.contains("# ap26 is the busiest"));
+        assert!(out.contains("title = \"AP tracker\""));
+        assert!(out.contains("name = \"ap26\""));
+    }
+
+    #[test]
+    fn set_creates_nested_tables_and_arrays() {
+        let out = apply_set(SAMPLE, "db.ko26.labels", "[active, students]").expect("set");
+        assert!(out.contains("labels = [\"active\", \"students\"]"));
+        let out = apply_set(&out, "db.ko26.retention_days", "14").expect("set2");
+        assert!(out.contains("retention_days = 14"));
+    }
+
+    #[test]
+    fn slug_meta_set_and_remove() {
+        let dir = std::env::temp_dir().join("mdrv-config-test");
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let p = dir.join("meta.toml");
+        std::fs::write(&p, SAMPLE).expect("write");
+        set_slug_meta(
+            &p,
+            "ap26",
+            Some("AP tracker"),
+            Some("weekly"),
+            Some(&["s".into()]),
+        )
+        .expect("set meta");
+        let text = std::fs::read_to_string(&p).expect("read");
+        assert!(text.contains("# ap26 is the busiest"));
+        assert!(text.contains("title = \"AP tracker\""));
+        set_slug_meta(&p, "ap26", None, None, None).expect("clear meta");
+        let text = std::fs::read_to_string(&p).expect("read2");
+        assert!(!text.contains("title"));
+    }
+
+    #[test]
+    fn slug_orders_dense_rewrite() {
+        let dir = std::env::temp_dir().join("mdrv-config-test");
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let p = dir.join("orders.toml");
+        std::fs::write(&p, SAMPLE).expect("write");
+        set_slug_orders(&p, &[("wa26".into(), 0), ("ap26".into(), 1)]).expect("set orders");
+        let text = std::fs::read_to_string(&p).expect("read");
+        assert!(text.contains("# ap26 is the busiest"));
+        assert!(text.contains("order = 1"));
+        assert!(text.contains("order = 0"));
     }
 }

@@ -44,3 +44,4 @@ carapace_spec_clap = { workspace = true }
 toml = { workspace = true }
 cron = { workspace = true }
 chrono = { workspace = true }
+toml_edit = { workspace = true }

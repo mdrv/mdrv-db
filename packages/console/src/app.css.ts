@@ -105,6 +105,7 @@ export const badge = css({
 		background: 'rgba(243, 139, 168, 0.08)',
 	},
 	'&[data-tone=never]': { color: c.muted, borderColor: c.border },
+	'&[data-tone=label]': { color: c.muted, borderColor: c.border, background: 'rgba(108, 112, 134, 0.10)' },
 })
 
 export const button = css({
@@ -120,6 +121,7 @@ export const button = css({
 	'&:disabled': { opacity: 0.45, cursor: 'default' },
 	// Primary variant via attribute, not a second class (atomic ordering).
 	'&[data-variant=primary]': { color: c.ok, borderColor: c.ok },
+	'&[data-active=true]': { color: c.ok, borderColor: c.ok },
 })
 
 export const input = css({
@@ -147,6 +149,14 @@ export const row = css({
 	gap: '10px',
 	flexWrap: 'wrap',
 	marginTop: '10px',
+})
+
+export const filterRow = css({
+	display: 'flex',
+	alignItems: 'center',
+	gap: '8px',
+	flexWrap: 'wrap',
+	marginBottom: '10px',
 })
 
 export const metaGrid = css({

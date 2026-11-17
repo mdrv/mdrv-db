@@ -5,6 +5,9 @@ export type LastResult = 'ok' | 'skipped' | 'error' | 'not_initialized' | 'never
 export interface SlugStatus {
 	slug: string
 	name: string
+	title?: string | null
+	description?: string | null
+	labels?: string[] | null
 	data_dir: string
 	cron: string
 	retention_days: number
@@ -148,3 +151,32 @@ export const login = (token: string): Promise<unknown> =>
 	request<unknown>('/login', { method: 'POST', ...json({ token }) })
 
 export const logout = (): Promise<unknown> => request<unknown>('/logout', { method: 'POST' })
+
+export interface MetaPatchBody {
+	title: string | null
+	description: string | null
+	labels: string[] | null
+}
+
+export interface MetaResponse {
+	type: 'meta'
+	slug: string
+	entry: SlugStatus
+}
+
+export const patchMeta = (slug: string, body: MetaPatchBody): Promise<MetaResponse> =>
+	request<MetaResponse>(`/api/slugs/${encodeURIComponent(slug)}/meta`, {
+		method: 'PATCH',
+		...json(body),
+	})
+
+export interface OrderResponse {
+	type: 'order'
+	slugs: string[]
+}
+
+export const reorderFleet = (slug: string, direction: 'up' | 'down'): Promise<OrderResponse> =>
+	request<OrderResponse>('/api/fleet/order', {
+		method: 'PATCH',
+		...json({ slug, direction }),
+	})
