@@ -1,9 +1,7 @@
 <script lang='ts'>
 	import {
 		badge,
-		badgeVariant,
 		button,
-		buttonPrimary,
 		detailCell,
 		errorText,
 		heading,
@@ -194,11 +192,10 @@
 					class={selectedSlug === s.slug ? rowActive : undefined}
 					onclick={() => select(s.slug)}
 				>
-					<td>{s.slug} {#if runningSlug === s.slug}<span class={`${badge} ${badgeVariant.running}`}>running…</span>{/if}</td>
+					<td>{s.slug} {#if runningSlug === s.slug}<span class={badge} data-tone='running'>running…</span>{/if}</td>
 					<td>{s.name}</td>
 					<td>
-						<span
-							class={`${badge} ${badgeVariant[resultVariant(s.last_result)]}`}
+						<span class={badge} data-tone={resultVariant(s.last_result)}
 						>{s.last_result}</span>
 					</td>
 					<td>{formatMs(s.last_run_ms)}</td>
@@ -233,8 +230,7 @@
 			<dd>{selected.initialized ? 'yes' : 'no'}</dd>
 			<dt>last result</dt>
 			<dd>
-				<span
-					class={`${badge} ${badgeVariant[resultVariant(selected.last_result)]}`}
+				<span class={badge} data-tone={resultVariant(selected.last_result)}
 				>{selected.last_result}</span>
 			</dd>
 			<dt>last run</dt>
@@ -251,7 +247,8 @@
 		{/if}
 		<div class={row}>
 			<button
-				class={`${button} ${buttonPrimary}`}
+				class={button}
+				data-variant='primary'
 				disabled={busy !== null || !selected.initialized}
 				onclick={backupNow}
 			>
@@ -333,7 +330,8 @@
 						<li>
 							<span class={muted}>{formatMs(entry.ts_ms)}</span>
 							<span
-								class={`${badge} ${badgeVariant[levelVariant[entry.level]]}`}
+								class={badge}
+								data-tone={levelVariant[entry.level]}
 							>
 								{levelName[entry.level] ?? entry.level}
 							</span>

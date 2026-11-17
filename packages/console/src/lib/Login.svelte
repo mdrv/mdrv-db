@@ -1,7 +1,6 @@
 <script lang='ts'>
 	import {
 		button,
-		buttonPrimary,
 		errorText,
 		heading,
 		input,
@@ -52,7 +51,8 @@
 	{/if}
 	<div class={row}>
 		<button
-			class={`${button} ${buttonPrimary}`}
+			class={button}
+			data-variant='primary'
 			type='submit'
 			disabled={busy || token.length === 0}
 		>

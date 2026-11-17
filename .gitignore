@@ -4,3 +4,4 @@
 recovery/
 *.node
 node_modules/
+styled-system/

@@ -1,6 +1,6 @@
 import { configureSync, getConsoleSink, getLogger } from '@logtape/logtape'
 import { mount } from 'svelte'
-import { themeClass } from './app.css'
+import './panda.css'
 import App from './App.svelte'
 
 // LogTape: minimal console sink; configureSync keeps this TLA-free for
@@ -20,8 +20,6 @@ self.addEventListener('error', (event) => {
 self.addEventListener('unhandledrejection', (event) => {
 	log.error`unhandled rejection: ${String(event.reason)}`
 })
-
-document.documentElement.classList.add(themeClass)
 
 const target = document.getElementById('app')
 if (target) mount(App, { target })

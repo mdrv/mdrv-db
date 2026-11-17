@@ -1,0 +1,3 @@
+/* Generated-CSS root for Panda: the vite plugin injects all compiled CSS
+   into this file (guide ch. 02). Imported once from src/main.ts. */
+@layer reset, base, tokens, recipes, utilities;
