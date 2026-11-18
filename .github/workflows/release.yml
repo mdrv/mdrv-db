@@ -245,7 +245,7 @@ jobs:
     steps:
       - name: Setup system (builder user for makepkg)
         run: |
-          pacman -Sy --noconfirm pacman-contrib git openssh
+          pacman -Syu --noconfirm pacman-contrib git openssh
           useradd -m builder
           echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
       - name: Setup SSH for AUR
