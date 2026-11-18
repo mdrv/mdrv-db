@@ -54,7 +54,7 @@ jobs:
       - name: Install musl tools
         if: contains(matrix.target, 'musl')
         run: sudo apt-get update && sudo apt-get install -y musl-tools
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.99.1
         with:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
@@ -144,7 +144,7 @@ jobs:
         run: |
           (cd packages/console && bun install --frozen-lockfile && bun run build)
           diff -r packages/console/dist crates/mdrv-db/console-dist
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.99.1
       # skip when the version is already published (idempotent re-runs);
       # the crates.io API exposes the version as "num" (not "vers")
       - run: |
@@ -173,7 +173,7 @@ jobs:
       MACOSX_DEPLOYMENT_TARGET: ${{ matrix.dt || '11.0' }}
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.99.1
         with:
           targets: ${{ matrix.t }}
       - uses: Swatinem/rust-cache@v2
